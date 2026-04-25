@@ -50,20 +50,16 @@
         }
 
         .centered-box {
-            /* Background image now applied directly */
+            width: 90vw;
+            height: 85vh;
+            max-width: 1665px;
             background-image: url('images/detailedwood_sides_trimmed.png');
             background-size: 100% 100%;
             background-position: center;
             background-repeat: no-repeat;
-            
-            /* Sizing */
-            width: 95%;
-            max-width: 1665px;
-            height: auto;
-            aspect-ratio: 16 / 9; /* Maintain a reasonable aspect ratio */
             pointer-events: auto;
-            flex-shrink: 0;
             position: relative;
+            flex-shrink: 0;
         }
 
         .indicator {
@@ -309,15 +305,13 @@
     /* --- MOBILE RESPONSIVE STYLES --- */
     @media (max-width: 768px) {
         
-        /* 1. Make the centered box fill most of the tablet screen */
+        /* Make the centered box fill most of the tablet screen */
         .centered-box {
-            width: 90vw;
-            height: 85vh;
-            aspect-ratio: auto;
-            background-size: 100% 100%;
+            width: 95vw;
+            height: 90vh;
         }
 
-        /* 2. Expand the chat area so text isn't squished */
+        /* Expand the chat area so text isn't squished */
         #wood-chat-overlay {
             top: 12%; 
             bottom: 20%; 
@@ -325,7 +319,7 @@
             right: 8%;  
         }
 
-        /* 3. Shrink the settings panel slightly so it doesn't block the screen */
+        /* Shrink the settings panel slightly so it doesn't block the screen */
         #settings-panel {
             top: 10px;
             left: 10px;
@@ -344,7 +338,7 @@
             font-size: 11px;
         }
 
-        /* 4. Make sure the input area doesn't break */
+        /* Make sure the input area doesn't break */
         #wood-input-area {
             padding: 6px 10px;
         }
@@ -353,20 +347,20 @@
             font-size: 12px;
         }
 
-        /* 5. Ensure the sidebar doesn't take up the WHOLE screen when opened */
+        /* Ensure the sidebar doesn't take up the WHOLE screen when opened */
         #chats-sidebar {
             width: 80%; /* Takes up 80% of a phone screen rather than a fixed 260px */
             max-width: 300px;
         }
 
-        /* 6. Make chat bubbles more readable on small screens */
+        /* Make chat bubbles more readable on small screens */
         .chat-bubble {
             padding: 10px 12px;
             font-size: 12px;
             max-width: 95%;
         }
 
-        /* 7. Adjust indicator size for mobile */
+        /* Adjust indicator size for mobile */
         .indicator {
             font-size: 10px;
             padding: 8px 12px;
@@ -378,12 +372,10 @@
     /* Extra small screens (phones in portrait) */
     @media (max-width: 480px) {
         
-        /* Make the box fill even more of the screen on phones */
+        /* Make the box fill almost the entire phone screen */
         .centered-box {
-            width: 90vw;
-            height: 85vh;
-            aspect-ratio: auto;
-            background-size: 100% 100%;
+            width: 98vw;
+            height: 95vh;
         }
 
         #wood-chat-overlay {
