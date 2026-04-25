@@ -52,14 +52,16 @@
         .centered-box {
             width: 90vw;
             height: 85vh;
-            max-width: 1665px;
+            max-width: 1400px;
             background-image: url('images/detailedwood_sides_trimmed.png');
-            background-size: 100% 100%;
+            background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
-            pointer-events: auto;
+            border-radius: 16px;
             position: relative;
             flex-shrink: 0;
+            pointer-events: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
         }
 
         .indicator {
@@ -305,25 +307,23 @@
     /* --- MOBILE RESPONSIVE STYLES --- */
     @media (max-width: 768px) {
         
-        /* Make the centered box fill most of the tablet screen */
         .centered-box {
             width: 95vw;
             height: 90vh;
         }
 
-        /* Expand the chat area so text isn't squished */
         #wood-chat-overlay {
-            top: 12%; 
-            bottom: 20%; 
-            left: 8%;
-            right: 8%;  
+            left: 5%;
+            right: 5%;
+            top: 10%;
+            bottom: 12%;
         }
 
         /* Shrink the settings panel slightly so it doesn't block the screen */
         #settings-panel {
             top: 10px;
             left: 10px;
-            transform: scale(0.85); /* Shrinks the panel to 85% size */
+            transform: scale(0.85);
             transform-origin: top left;
             padding: 6px 10px;
         }
@@ -349,7 +349,7 @@
 
         /* Ensure the sidebar doesn't take up the WHOLE screen when opened */
         #chats-sidebar {
-            width: 80%; /* Takes up 80% of a phone screen rather than a fixed 260px */
+            width: 80%;
             max-width: 300px;
         }
 
@@ -372,17 +372,16 @@
     /* Extra small screens (phones in portrait) */
     @media (max-width: 480px) {
         
-        /* Make the box fill almost the entire phone screen */
         .centered-box {
             width: 98vw;
-            height: 95vh;
+            height: 96vh;
         }
 
         #wood-chat-overlay {
-            top: 10%;
-            bottom: 15%;
-            left: 5%;
-            right: 5%;
+            left: 4%;
+            right: 4%;
+            top: 8%;
+            bottom: 10%;
         }
 
         #settings-panel {
