@@ -50,10 +50,9 @@
         }
 
         .centered-box {
-            /* 
-               UPDATED WIDTH: Calculated to give ~800px of writing space
-            */
-            width: 1665px;
+            /* Fluid width: scales with screen but respects max-width */
+            width: 95%;
+            max-width: 1665px;
             height: auto; 
             pointer-events: auto;
             flex-shrink: 0;
@@ -204,7 +203,7 @@
         padding-bottom: 6px; 
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
-    .settings-controls { display: flex; gap: 8px; align-items: center; }
+    .settings-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .setting-btn { 
         background: rgba(0,0,0,0.2); 
         color: #f5f5dc; 
@@ -302,8 +301,128 @@
         align-items: center; 
         justify-content: center;
         transition: background 0.2s ease;
+        flex-shrink: 0;
     }
     #wood-send-btn:hover { background: rgba(184, 134, 11, 1); }
+
+    /* --- MOBILE RESPONSIVE STYLES --- */
+    @media (max-width: 768px) {
+        
+        /* 1. Expand the chat area so text isn't squished */
+        #wood-chat-overlay {
+            top: 12%; 
+            bottom: 12%; 
+            left: 8%; /* Much smaller margins for small screens */
+            right: 8%;  
+        }
+
+        /* 2. Shrink the settings panel slightly so it doesn't block the screen */
+        #settings-panel {
+            top: 10px;
+            left: 10px;
+            transform: scale(0.85); /* Shrinks the panel to 85% size */
+            transform-origin: top left;
+            padding: 6px 10px;
+        }
+
+        #settings-header {
+            font-size: 11px;
+            padding-bottom: 4px;
+        }
+
+        .setting-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
+
+        /* 3. Make sure the input area doesn't break */
+        #wood-input-area {
+            padding: 6px 10px;
+        }
+
+        #wood-input {
+            font-size: 12px;
+        }
+
+        /* 4. Ensure the sidebar doesn't take up the WHOLE screen when opened */
+        #chats-sidebar {
+            width: 80%; /* Takes up 80% of a phone screen rather than a fixed 260px */
+            max-width: 300px;
+        }
+
+        /* 5. Make chat bubbles more readable on small screens */
+        .chat-bubble {
+            padding: 10px 12px;
+            font-size: 12px;
+            max-width: 95%;
+        }
+
+        /* 6. Adjust indicator size for mobile */
+        .indicator {
+            font-size: 10px;
+            padding: 8px 12px;
+            bottom: 10px;
+            right: 10px;
+        }
+    }
+
+    /* Extra small screens (phones in portrait) */
+    @media (max-width: 480px) {
+        
+        #wood-chat-overlay {
+            top: 10%;
+            bottom: 10%;
+            left: 5%;
+            right: 5%;
+        }
+
+        #settings-panel {
+            transform: scale(0.75);
+            top: 5px;
+            left: 5px;
+            padding: 5px 8px;
+        }
+
+        #settings-header {
+            font-size: 10px;
+        }
+
+        .setting-btn {
+            padding: 3px 6px;
+            font-size: 10px;
+        }
+
+        .chat-bubble {
+            padding: 8px 10px;
+            font-size: 11px;
+        }
+
+        #wood-input {
+            font-size: 11px;
+        }
+
+        #wood-send-btn {
+            width: 28px;
+            height: 28px;
+        }
+
+        #wood-send-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        #chats-toggle-btn {
+            padding: 8px 4px;
+            font-size: 10px;
+        }
+
+        .indicator {
+            font-size: 9px;
+            padding: 6px 10px;
+            bottom: 5px;
+            right: 5px;
+        }
+    }
 
 </style>
 
@@ -345,7 +464,7 @@
         <div id="wood-input-area">
             <input type="text" id="wood-input" placeholder="Type here..." onkeypress="handleKey(event)">
             <button id="wood-send-btn" onclick="sendMsg()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9"></polygon></svg>
             </button>
         </div>
     </div>
