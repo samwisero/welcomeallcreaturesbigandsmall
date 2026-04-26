@@ -446,10 +446,8 @@
 </head>
 <body>
 
-<!-- Chats toggle button (left edge) -->
 <button id="chats-toggle-btn">Chats</button>
 
-<!-- Chats sidebar drawer -->
 <div id="chats-sidebar">
   <div id="chats-sidebar-header">
     <span>Chats</span>
@@ -463,10 +461,7 @@
 
     <div class="content-container">
         <div class="centered-box">
-            <!-- Wood background is now applied as CSS background-image -->
-
-    <!-- SETTINGS PANEL (MOVED) -->
-    <div id="settings-panel">
+            <div id="settings-panel">
         <div id="settings-header">Settings</div>
         <div class="settings-controls">
             <button id="font-btn" class="setting-btn" onclick="cycleFontSize()">Aa: <span id="font-size-display">13.5</span></button>
@@ -475,7 +470,6 @@
         </div>
     </div>
 
-    <!-- CHAT OVERLAY -->
     <div id="wood-chat-overlay">
         <div id="wood-chat-messages"></div>
         <div id="wood-input-area">
@@ -516,7 +510,6 @@
     </script>
 
 <script>
-    const API_KEY = "csk-wxytp69eenkhp6tdtnwvme8838jjt3wxv95c92ffjptvnknk";
     const themeContainer = document.body;
     const chatOverlay = document.getElementById('wood-chat-overlay');
     let firstMessageSent = false;
@@ -553,18 +546,23 @@
         addBubble(txt, 'user');
         inp.value = '';
         try {
-            const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+            // Notice this points directly to your new Vercel serverless function!
+            const res = await fetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    model: "llama-3.3-70b",
-                    messages: [{role: "system", content: "You are a fun, joyful, and free spirited AI."},{role: "user", content: txt}],
-                    temperature: 0.8
+                    messages: [
+                        {role: "system", content: "You are a fun, joyful, and free spirited AI."},
+                        {role: "user", content: txt}
+                    ]
                 })
             });
             const data = await res.json();
             if(data.choices) addBubble(data.choices[0].message.content, 'ai');
-        } catch(e) { addBubble("Oops, silence...", 'ai'); }
+        } catch(e) { 
+            console.error(e);
+            addBubble("Oops, silence...", 'ai'); 
+        }
     }
 
     function addBubble(text, type) {
