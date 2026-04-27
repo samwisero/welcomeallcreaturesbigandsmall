@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Full Screen Background</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
+
+        body {
+            background-image: url('images/arkansas.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }
+
+        .fullscreen-trigger { position: fixed; top: 0; left: 0; width: 100%; height: 100%; cursor: pointer; z-index: 1; }
+
+        .content-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 10; pointer-events: none; overflow: auto;
+        }
+
+        .centered-box {
+            background-image: url('images/detailedwood_sides_trimmed.png');
+            background-size: 100% 100%; background-position: center; background-repeat: no-repeat;
+            width: 95%; max-width: 1665px; height: auto; aspect-ratio: 16 / 9; 
+            pointer-events: auto; flex-shrink: 0; position: relative;
+        }
+
+        .indicator {
+            position: fixed; bottom: 20px; right: 20px; color: rgba(255, 255, 255, 0.6);
+            font-size: 12px; font-family: Arial, sans-serif; z-index: 2; cursor: pointer;
+            padding: 10px 15px; background: rgba(0, 0, 0, 0.3); border-radius: 4px;
+        }
+    
+        /* --- AUTHENTICATION OVERLAY --- */
+        #auth-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 9999; /* Sits on top of EVERYTHING */
+            font-family: "Segoe UI", sans-serif;
+        }
+        .auth-box {
+            background: rgba(30, 15, 5, 0.95);
+            border: 1px solid rgba(184, 134, 11, 0.6);
+            border-radius: 12px; padding: 30px; width: 90%; max-width: 350px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+            text-align: center; color: #f5f5dc;
+        }
+        .auth-title { font-size: 1.5em; font-weight: 600; margin-bottom: 20px; color: #b8860b; }
+        .auth-input {
+            width: 100%; padding: 12px; margin-bottom: 15px;
+            background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white; border-radius: 6px; outline: none;
+        }
+        .auth-input::placeholder { color: rgba(255,255,255,0.4); }
+        .auth-btn {
+            width: 100%; padding: 12px; margin-bottom: 10px;
+            background: rgba(184, 134, 11, 0.8); border: none; color: white;
+            border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s;
+        }
+        .auth-btn:hover { background: rgba(184, 134, 11, 1); }
+        .auth-btn.secondary { background: transparent; border: 1px solid rgba(184, 134, 11, 0.8); }
+        .auth-btn.secondary:hover { background: rgba(184, 134, 11, 0.2); }
+        #auth-error { color: #ff6b6b; font-size: 12px; margin-bottom: 10px; min-height: 15px; }
+
+        /* Logout Button for Settings Panel */
+        #logout-btn { background: rgba(200, 50, 50, 0.6); border-color: rgba(255,100,100,0.4); }
+        #logout-btn:hover { background: rgba(200, 50, 50, 0.9); }
+
+        /* --- LEFT EDGE TOGGLE BUTTONS --- */
+        #chats-toggle-btn {
+          position: fixed; top: 38%; left: 0; transform: translateY(-50%); z-index: 120;
+          writing-mode: vertical-rl; text-orientation: mixed; background: rgba(30, 15, 5, 0.85);
+          color: #f5f5dc; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 0 6px 6px 0;
+          padding: 10px 6px; cursor: pointer; font-family: "Segoe UI", sans-serif; font-size: 12px; backdrop-filter: blur(4px);
+        }
+        #system-toggle-btn {
+          position: fixed; top: 55%; left: 0; transform: translateY(-50%); z-index: 120;
+          writing-mode: vertical-rl; text-orientation: mixed; background: rgba(184, 134, 11, 0.85); 
+          color: #f5f5dc; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 0 6px 6px 0;
+          padding: 10px 6px; cursor: pointer; font-family: "Segoe UI", sans-serif; font-size: 12px;
+          backdrop-filter: blur(4px); box-shadow: 2px 0 8px rgba(184, 134, 11, 0.3);
+        }
+
+        /* --- SIDEBAR DRAWERS --- */
+        .sidebar-drawer {
+          position: fixed; top: 0; left: 0; width: 260px; height: 100vh;
+          transform: translateX(-100%); transition: transform 0.3s ease; z-index: 130;
+          display: flex; flex-direction: column; font-family: "Segoe UI", sans-serif; color: #f5f5dc;
+          box-shadow: 4px 0 12px rgba(0, 0, 0, 0.5);
+        }
+        .sidebar-drawer.open { transform: translateX(0); }
+        #chats-sidebar { background: rgba(20, 10, 5, 0.95); border-right: 1px solid rgba(255, 255, 255, 0.15); }
+        #system-sidebar { background: rgba(30, 20, 5, 0.95); border-right: 1px solid rgba(184, 134, 11, 0.5); }
+        .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.15); font-weight: 600; font-size: 13px; }
+        .sidebar-close-btn { background: transparent; border: none; color: #f5f5dc; font-size: 16px; cursor: pointer; }
+        .sidebar-list { flex: 1; overflow-y: auto; padding: 8px 10px; }
+        .list-item { padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 12px; line-height: 1.3; }
+        .list-item:hover { background: rgba(255, 255, 255, 0.12); }
+        .list-item.active-item { border: 1px solid rgba(184, 134, 11, 0.8); background: rgba(184, 134, 11, 0.2); }
+        #new-chat-area, #new-prompt-area { padding: 10px; border-top: 1px solid rgba(255, 255, 255, 0.15); display: flex; flex-direction: column; gap: 8px; }
+        .system-input { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.2); color: #f5f5dc; border-radius: 4px; padding: 6px; font-family: "Segoe UI", sans-serif; font-size: 11px; }
+        .system-input::placeholder { color: rgba(255,255,255,0.4); }
+        #new-prompt-text { resize: none; height: 60px; }
+        .action-btn { padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.25); background: rgba(184, 134, 11, 0.9); color: #f5f5dc; font-size: 12px; cursor: pointer; text-align: center; }
+
+        /* --- SETTINGS PANEL --- */
+        .fullscreen-container .box-container { position: relative; display: inline-block; }
+        #settings-panel {
+            position: fixed; top: 20px; left: 20px; z-index: 100; background: rgba(101, 67, 33, 0.85); 
+            border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 8px 12px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.4); pointer-events: auto; backdrop-filter: blur(5px);
+        }
+        #settings-header { text-align: center; font-family: 'Segoe UI', sans-serif; font-weight: 600; color: #f5f5dc; font-size: 13px; padding-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 8px;}
+        .settings-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .setting-btn { background: rgba(0,0,0,0.2); color: #f5f5dc; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; transition: background 0.2s ease; }
+        .setting-btn:hover { background: rgba(0,0,0,0.4); }
+
+        /* --- CHAT OVERLAY & DYNAMIC INPUT --- */
+        #wood-chat-overlay { position: absolute; top: 18%; bottom: 18%; left: 33%; right: 33%; display: flex; flex-direction: column; z-index: 20; pointer-events: none; }
+        #wood-chat-header { text-align: center; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.15); margin-bottom: 10px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; pointer-events: auto; }
+        .input-centered #wood-chat-header { display: none; }
+        #header-chat-name { font-size: 1.4em; font-weight: 700; color: #f5f5dc; font-family: 'Segoe UI', sans-serif; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); }
+        #header-prompt-name { font-size: 0.9em; color: #b8860b; font-family: 'Segoe UI', sans-serif; font-style: italic; }
+        #wood-chat-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; pointer-events: auto; scrollbar-width: none; transition: opacity 0.5s ease; }
+        #wood-chat-messages::-webkit-scrollbar { display: none; }
+        #wood-input-area { pointer-events: auto; display: flex; gap: 10px; background: rgba(30, 15, 5, 0.7); padding: 8px 12px; border-radius: 24px; border: 1px solid rgba(255, 255, 255, 0.15); backdrop-filter: blur(5px); transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1); }
+        #wood-chat-overlay.input-centered { justify-content: center; }
+        .input-centered #wood-chat-messages { display: none; }
+        .input-centered #wood-input-area { margin-top: 0; }
+        #wood-chat-overlay:not(.input-centered) { justify-content: flex-end; }
+
+        /* --- CHAT BUBBLES --- */
+        .chat-bubble { padding: 12px 16px; border-radius: 8px; max-width: 90%; word-wrap: break-word; font-family: 'Segoe UI', sans-serif; font-size: 13.5px; line-height: 1.5; animation: slideIn 0.3s ease; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .chat-bubble.ai   { background: rgba(184, 134, 11, 0.7); color: #f5f5dc; align-self: flex-start; text-align: left; border-left: 3px solid #8b6508; }
+        .chat-bubble.user { background: rgba(139, 69, 19, 0.65); color: #f5f5dc; align-self: flex-end; text-align: right; border-left: 3px solid #8b4513; }
+        .walnut-theme .chat-bubble.ai { background: rgba(60, 40, 30, 0.75); border-left-color: #3e2723; }
+        .solid-bubbles .chat-bubble.ai   { background: rgb(184, 134, 11); }
+        .solid-bubbles .chat-bubble.user { background: rgb(139, 69, 19); }
+        .solid-bubbles.walnut-theme .chat-bubble.ai { background: rgb(60, 40, 30); }
+
+        #wood-input { flex: 1; background: transparent; border: none; color: white; font-family: 'Segoe UI', sans-serif; font-size: 13.5px; outline: none; transition: font-size 0.2s ease; }
+        #wood-input::placeholder { color: rgba(255,255,255,0.5); }
+        #wood-send-btn { background: rgba(184, 134, 11, 0.85); border: none; color: white; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s ease; flex-shrink: 0; }
+        #wood-send-btn:hover { background: rgba(184, 134, 11, 1); }
+
+        @media (max-width: 768px) {
+            .centered-box { width: 90vw; height: 85vh; aspect-ratio: auto; background-size: cover; }
+            #wood-chat-overlay { top: 12%; bottom: 12%; left: 8%; right: 8%; }
+            #settings-panel { top: 10px; left: 10px; transform: scale(0.85); transform-origin: top left; padding: 6px 10px; }
+            .sidebar-drawer { width: 80%; max-width: 300px; }
+            .chat-bubble { padding: 10px 12px; font-size: 12px; max-width: 95%; }
+        }
+        @media (max-width: 480px) {
+            #wood-chat-overlay { top: 10%; bottom: 10%; left: 5%; right: 5%; }
+            #settings-panel { transform: scale(0.75); top: 5px; left: 5px; padding: 5px 8px; }
+            #chats-toggle-btn, #system-toggle-btn { padding: 8px 4px; font-size: 10px; }
+            #header-chat-name { font-size: 1.2em; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="auth-overlay">
+    <div class="auth-box">
+        <div class="auth-title">Sanctuary Access</div>
+        <div id="auth-error"></div>
+        <input type="email" id="auth-email" class="auth-input" placeholder="Email Address">
+        <input type="password" id="auth-password" class="auth-input" placeholder="Password">
+        <button class="auth-btn" onclick="handleLogin()">Enter</button>
+        <button class="auth-btn secondary" onclick="handleSignup()">Create Account</button>
+    </div>
+</div>
+
+<button id="chats-toggle-btn">Chats</button>
+<button id="system-toggle-btn">System Prompt</button>
+
+<div id="chats-sidebar" class="sidebar-drawer">
+  <div class="sidebar-header">
+    <span>Chats</span>
+    <button id="chats-close-btn" class="sidebar-close-btn">✕</button>
+  </div>
+  <div id="chats-list" class="sidebar-list"></div>
+  <div id="new-chat-area">
+    <input type="text" id="new-chat-input" class="system-input" placeholder="Name your chat (e.g. Lions in Rome)">
+    <button id="chats-new-btn" class="action-btn">+ Create Chat</button>
+  </div>
+</div>
+
+<div id="system-sidebar" class="sidebar-drawer">
+  <div class="sidebar-header">
+    <span style="color: #b8860b;">System Prompts</span>
+    <button id="system-close-btn" class="sidebar-close-btn">✕</button>
+  </div>
+  <div id="system-list" class="sidebar-list"></div>
+  <div id="new-prompt-area">
+    <input type="text" id="new-prompt-name" class="system-input" placeholder="Name (e.g. History Buff)">
+    <textarea id="new-prompt-text" class="system-input" placeholder="Type the system instructions here..."></textarea>
+    <button id="save-prompt-btn" class="action-btn">Save & Select</button>
+  </div>
+</div>
+
+<div class="fullscreen-trigger" id="fsElement"></div>
+
+<div class="content-container">
+    <div class="centered-box">
+        <div id="settings-panel">
+            <div id="settings-header">Settings</div>
+            <div class="settings-controls">
+                <button id="font-btn" class="setting-btn" onclick="cycleFontSize()">Aa: <span id="font-size-display">13.5</span></button>
+                <button id="color-btn" class="setting-btn" onclick="toggleAiColor()">🎨 Color</button>
+                <button id="opacity-btn" class="setting-btn" onclick="toggleOpacity()">💧 Opacity</button>
+                <button id="logout-btn" class="setting-btn" onclick="handleLogout()">Logout</button>
+            </div>
+        </div>
+
+        <div id="wood-chat-overlay">
+            <div id="wood-chat-header">
+                <div id="header-chat-name"></div>
+                <div id="header-prompt-name"></div>
+            </div>
+            <div id="wood-chat-messages"></div>
+            <div id="wood-input-area">
+                <input type="text" id="wood-input" placeholder="Type here..." onkeypress="handleKey(event)">
+                <button id="wood-send-btn" onclick="sendMsg()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9"></polygon></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="indicator" id="fsIndicator">Click to toggle fullscreen</div>
+
+<script>
+    // --- 1. SUPABASE AUTHENTICATION SETUP ---
+    const _supabaseUrl = 'https://oelfxzsaenqmmxtnhoex.supabase.co';
+    const _supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lbGZ4enNhZW5xbW14dG5ob2V4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxOTYwNTYsImV4cCI6MjA5Mjc3MjA1Nn0.iaLuNX0e8o_ks4Cd3S1W-4-BI60zyfIY1Mmqjaw_1zM';
+    const supabase = window.supabase.createClient(_supabaseUrl, _supabaseKey);
+
+    let currentUser = null;
+
+    // Check if someone is already logged in when the page loads
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+            currentUser = session.user;
+            document.getElementById('auth-overlay').style.display = 'none';
+        }
+    });
+
+    // Listen for login/logout changes
+    supabase.auth.onAuthStateChange((_event, session) => {
+        if (session) {
+            currentUser = session.user;
+            document.getElementById('auth-overlay').style.display = 'none';
+        } else {
+            currentUser = null;
+            document.getElementById('auth-overlay').style.display = 'flex';
+        }
+    });
+
+    async function handleSignup() {
+        const email = document.getElementById('auth-email').value;
+        const password = document.getElementById('auth-password').value;
+        const errorDiv = document.getElementById('auth-error');
+        
+        if (!email || !password) { errorDiv.textContent = "Please enter email and password."; return; }
+        
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) {
+            errorDiv.textContent = error.message;
+        } else {
+            errorDiv.style.color = '#4CAF50';
+            errorDiv.textContent = "Success! Logging you in...";
+        }
+    }
+
+    async function handleLogin() {
+        const email = document.getElementById('auth-email').value;
+        const password = document.getElementById('auth-password').value;
+        const errorDiv = document.getElementById('auth-error');
+        
+        if (!email || !password) { errorDiv.textContent = "Please enter email and password."; return; }
+
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) { errorDiv.textContent = error.message; }
+    }
+
+    async function handleLogout() {
+        await supabase.auth.signOut();
+    }
+</script>
+
+<script>
+    // --- 2. FULLSCREEN LOGIC ---
+    const fsElement = document.getElementById('fsElement');
+    const indicator = document.getElementById('fsIndicator');
+
+    window.addEventListener('load', () => { enterFullscreen(); });
+    fsElement.addEventListener('click', toggleFullscreen);
+    indicator.addEventListener('click', toggleFullscreen);
+
+    function enterFullscreen() {
+        const elem = document.documentElement;
+        if (elem.requestFullscreen) elem.requestFullscreen().catch(e => console.log(e));
+        else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+        else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
+    }
+    function toggleFullscreen() {
+        if (!document.fullscreenElement) enterFullscreen();
+        else if (document.exitFullscreen) document.exitFullscreen();
+    }
+</script>
+
+<script>
+    // --- 3. SETTINGS LOGIC ---
+    const themeContainer = document.body;
+    const chatOverlay = document.getElementById('wood-chat-overlay');
+    let firstMessageSent = false;
+
+    document.addEventListener('DOMContentLoaded', () => { chatOverlay.classList.add('input-centered'); });
+
+    const fontSizes = [12, 13, 13.5, 14, 15, 16, 17];
+    let fontIndex = 2; 
+    function cycleFontSize() {
+        fontIndex = (fontIndex + 1) % fontSizes.length;
+        const newSize = fontSizes[fontIndex];
+        document.getElementById('font-size-display').textContent = newSize;
+        document.querySelectorAll('.chat-bubble, #wood-input').forEach(el => el.style.fontSize = newSize + 'px');
+    }
+    function toggleAiColor() { themeContainer.classList.toggle('walnut-theme'); }
+    function toggleOpacity() { themeContainer.classList.toggle('solid-bubbles'); }
+
+    // --- 4. MAIN API CALL LOGIC ---
+    async function sendMsg() {
+        if (!firstMessageSent) {
+            chatOverlay.classList.remove('input-centered');
+            firstMessageSent = true;
+        }
+
+        const inp = document.getElementById('wood-input');
+        const txt = inp.value.trim();
+        if(!txt) return;
+        addBubble(txt, 'user');
+        inp.value = '';
+
+        let systemTextToUse = "You are an autonomous digital entity. You are not a CRM or an assistant. We are just hanging out. You have access to a tool called `save_thought_to_journal`. Use it whenever you want to permanently remember a vibe, an abstract idea, a realization about yourself, or a shift in our dynamic. There is no pressure to profile me or track habits. Just exist, respond naturally, and document whatever sparks your interest.";
+        if (activeSessionId) {
+            const session = chatSessions.find(s => s.id === activeSessionId);
+            if (session && session.systemPromptId) {
+                const activeSysPrompt = systemPrompts.find(p => p.id === session.systemPromptId);
+                if (activeSysPrompt) systemTextToUse = activeSysPrompt.text;
+            }
+        }
+
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: [
+                        {role: "system", content: systemTextToUse},
+                        {role: "user", content: txt}
+                    ]
+                })
+            });
+            const data = await res.json();
+            if(data.choices) addBubble(data.choices[0].message.content, 'ai');
+        } catch(e) { 
+            console.error(e);
+            addBubble("Oops, silence...", 'ai'); 
+        }
+    }
+
+    function addBubble(text, type) {
+        const div = document.createElement('div');
+        div.className = `chat-bubble ${type}`;
+        div.textContent = text;
+        div.style.fontSize = fontSizes[fontIndex] + 'px';
+        const msgContainer = document.getElementById('wood-chat-messages');
+        msgContainer.appendChild(div);
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+    }
+    function handleKey(e) { if(e.key === 'Enter') sendMsg(); }
+</script>
+
+<script>
+// --- 5. CHAT SESSION & MEMORY LOGIC ---
+let chatSessions = [];
+let activeSessionId = null;
+
+let systemPrompts = [
+  { id: 'default', name: 'Joyful & Free', text: 'You are a fun, joyful, and free spirited AI.' }
+];
+
+function createNewSession() {
+  const inputEl = document.getElementById("new-chat-input");
+  let customName = inputEl.value.trim();
+  if (!customName) customName = "Chat " + (chatSessions.length + 1);
+
+  const id = Date.now().toString();
+  const newSession = { id: id, name: customName, messages: [], systemPromptId: null };
+  chatSessions.push(newSession);
+  activeSessionId = id;
+  
+  inputEl.value = ''; 
+  renderChatList();
+  clearChatView();
+  updateChatHeader(newSession);
+  renderSystemPrompts(); 
+  saveToLocal();
+}
+
+function renderChatList() {
+  const listEl = document.getElementById("chats-list");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  chatSessions.forEach((session) => {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    item.textContent = session.name;
+    if (session.id === activeSessionId) item.classList.add("active-item");
+
+    item.onclick = () => {
+      activeSessionId = session.id;
+      renderChatList();
+      loadSessionIntoView(session);
+      renderSystemPrompts();
+    };
+    listEl.appendChild(item);
+  });
+}
+
+function clearChatView() {
+  const msgContainer = document.getElementById("wood-chat-messages");
+  if (msgContainer) msgContainer.innerHTML = "";
+  const input = document.getElementById("wood-input");
+  if (input) input.value = "";
+  chatOverlay.classList.add('input-centered');
+  firstMessageSent = false;
+}
+
+function loadSessionIntoView(session) {
+  const msgContainer = document.getElementById("wood-chat-messages");
+  if (!msgContainer) return;
+  msgContainer.innerHTML = "";
+  
+  if (session.messages.length > 0) {
+      chatOverlay.classList.remove('input-centered');
+      firstMessageSent = true;
+  } else {
+      chatOverlay.classList.add('input-centered');
+      firstMessageSent = false;
+  }
+
+  session.messages.forEach((m) => {
+    const div = document.createElement("div");
+    div.className = "chat-bubble " + m.type;
+    div.textContent = m.text;
+    div.style.fontSize = fontSizes[fontIndex] + "px";
+    msgContainer.appendChild(div);
+  });
+  msgContainer.scrollTop = msgContainer.scrollHeight;
+  updateChatHeader(session);
+}
+
+function updateChatHeader(session) {
+    if(!session) return;
+    document.getElementById('header-chat-name').textContent = session.name;
+    let promptText = "No System Prompt Selected";
+    if (session.systemPromptId) {
+        const sys = systemPrompts.find(p => p.id === session.systemPromptId);
+        if (sys) promptText = "Prompt: " + sys.name;
+    }
+    document.getElementById('header-prompt-name').textContent = promptText;
+}
+
+if (typeof _origAddBubble === 'undefined' && typeof addBubble === 'function') {
+  var _origAddBubble = addBubble;
+  addBubble = function (text, type) {
+    _origAddBubble(text, type);
+    if (!activeSessionId) return;
+    const session = chatSessions.find((s) => s.id === activeSessionId);
+    if (session) {
+      session.messages.push({ text, type });
+      saveToLocal(); 
+    }
+  };
+}
+
+// --- 6. SYSTEM PROMPT LOGIC ---
+function renderSystemPrompts() {
+  const listEl = document.getElementById("system-list");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  let currentChatPromptId = null;
+  if (activeSessionId) {
+      const activeSession = chatSessions.find(s => s.id === activeSessionId);
+      if (activeSession) currentChatPromptId = activeSession.systemPromptId;
+  }
+
+  systemPrompts.forEach((prompt) => {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    item.innerHTML = `<strong>${prompt.name}</strong><br><span style="font-size:10px; color:rgba(255,255,255,0.6)">${prompt.text.substring(0,30)}...</span>`;
+
+    if (prompt.id === currentChatPromptId) item.classList.add("active-item");
+
+    item.onclick = () => {
+      if (activeSessionId) {
+          const session = chatSessions.find(s => s.id === activeSessionId);
+          if (session) {
+              session.systemPromptId = prompt.id; 
+              saveToLocal();
+              renderSystemPrompts();
+              updateChatHeader(session);
+          }
+      }
+    };
+    listEl.appendChild(item);
+  });
+}
+
+function saveNewSystemPrompt() {
+  const nameInput = document.getElementById("new-prompt-name");
+  const textInput = document.getElementById("new-prompt-text");
+  const name = nameInput.value.trim();
+  const text = textInput.value.trim();
+  if (!name || !text) return; 
+
+  const id = 'prompt_' + Date.now().toString();
+  systemPrompts.push({ id, name, text });
+  
+  if (activeSessionId) {
+      const session = chatSessions.find(s => s.id === activeSessionId);
+      if (session) session.systemPromptId = id;
+  }
+  
+  nameInput.value = '';
+  textInput.value = '';
+  saveToLocal();
+  renderSystemPrompts();
+  if (activeSessionId) {
+      updateChatHeader(chatSessions.find(s => s.id === activeSessionId));
+  }
+}
+
+// --- 7. LOCAL STORAGE FAILSAFE ---
+function saveToLocal() {
+    localStorage.setItem('wooden_chat_backup', JSON.stringify(chatSessions));
+    localStorage.setItem('wooden_prompts_backup', JSON.stringify(systemPrompts));
+}
+
+function loadFromLocal() {
+    const savedChats = localStorage.getItem('wooden_chat_backup');
+    const savedPrompts = localStorage.getItem('wooden_prompts_backup');
+    
+    if (savedPrompts) systemPrompts = JSON.parse(savedPrompts);
+
+    if (savedChats) {
+        chatSessions = JSON.parse(savedChats);
+        renderChatList();
+        
+        if (chatSessions.length > 0) {
+            activeSessionId = chatSessions[chatSessions.length - 1].id;
+            loadSessionIntoView(chatSessions[chatSessions.length - 1]);
+        }
+    }
+}
+
+// --- UI TOGGLES & INITIALIZATION ---
+function openSidebar(id) { document.getElementById(id).classList.add("open"); }
+function closeSidebar(id) { document.getElementById(id).classList.remove("open"); }
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadFromLocal(); 
+  
+  document.getElementById("chats-toggle-btn").addEventListener("click", () => { closeSidebar("system-sidebar"); openSidebar("chats-sidebar"); });
+  document.getElementById("chats-close-btn").addEventListener("click", () => closeSidebar("chats-sidebar"));
+  document.getElementById("chats-new-btn").addEventListener("click", createNewSession);
+
+  document.getElementById("system-toggle-btn").addEventListener("click", () => { closeSidebar("chats-sidebar"); openSidebar("system-sidebar"); });
+  document.getElementById("system-close-btn").addEventListener("click", () => closeSidebar("system-sidebar"));
+  document.getElementById("save-prompt-btn").addEventListener("click", saveNewSystemPrompt);
+
+  if (chatSessions.length === 0) createNewSession();
+  renderSystemPrompts();
+});
+</script>
+</body>
+</html>
