@@ -1,9 +1,9 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-import psycopg # We use this to talk directly to your new journal!
+import psycopg
+import traceback # Added so Vercel stops hiding the errors
 
-# Import Agno's brain modules
 from agno.agent import Agent
 from agno.models.openrouter import OpenRouter
 from agno.storage.agent.postgres import PostgresAgentStorage
@@ -51,11 +51,17 @@ class handler(BaseHTTPRequestHandler):
             # 2. Grab your keys
             api_key = os.environ.get("OPENROUTER_API_KEY")
             db_url = os.environ.get("SUPABASE_DB_URL")
+            
+            if not db_url:
+                raise ValueError("SUPABASE_DB_URL is completely missing from Vercel Environment Variables!")
+
+            # FIX: SQLAlchemy needs a specific prefix to work with psycopg3, but Supabase gives a standard one.
+            sqlalchemy_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
             # 3. The Tape Recorder (Failsafe)
             storage = PostgresAgentStorage(
                 table_name="chat_sessions",
-                db_url=db_url
+                db_url=sqlalchemy_url
             )
 
             # 4. Create the Unfiltered Agent
@@ -68,9 +74,6 @@ class handler(BaseHTTPRequestHandler):
                 session_id="default_wooden_session",
                 add_history_to_messages=True,
                 read_chat_history=True,
-                
-                # --- THE MAGIC SAUCE ---
-                # We give it the journal tool, but ZERO corporate agentic memory!
                 tools=[save_thought_to_journal],
                 system_prompt=system_prompt,
             )
@@ -92,7 +95,20 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result).encode('utf-8'))
             
         except Exception as e:
-            self.send_response(500)
+            # FORCE VERCEL TO PRINT THE LOG
+            print("--- FATAL PYTHON CRASH ---")
+            traceback.print_exc()
+            
+            # SEND THE ERROR DIRECTLY TO THE FRONTEND AS A CHAT BUBBLE
+            error_msg = f"SYSTEM CRASH LOG:\n{str(e)}\n\n(Check Vercel Logs for full traceback)"
+            result = {
+                "choices": [
+                    {"message": {"content": error_msg}}
+                ]
+            }
+            
+            # We send a "200 OK" so the frontend accepts the message and draws the bubble
+            self.send_response(200) 
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps(result).encode('utf-8'))
