@@ -67,7 +67,7 @@ class handler(BaseHTTPRequestHandler):
             # 4. Create the Unfiltered Agent
             agent = Agent(
                 model=OpenRouter(
-                    id="nousresearch/hermes-3-llama-3.1-70b",
+                    id="mistralai/mistral-nemo",
                     api_key=api_key
                 ),
                 storage=storage,
