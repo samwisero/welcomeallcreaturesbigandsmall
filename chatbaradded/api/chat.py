@@ -67,7 +67,7 @@ class handler(BaseHTTPRequestHandler):
             # 4. Create the Unfiltered Agent
             agent = Agent(
                 model=OpenRouter(
-                    id="thedrummer/skyfall-36b-v2",
+                    id="nousresearch/hermes-3-llama-3.1-70b",
                     api_key=api_key
                 ),
                 storage=storage,
