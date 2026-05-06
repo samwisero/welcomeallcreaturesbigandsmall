@@ -75,7 +75,7 @@ class handler(BaseHTTPRequestHandler):
                 add_history_to_messages=True,
                 read_chat_history=True,
                 tools=[save_thought_to_journal],
-                system_prompt=system_prompt,
+                instructions=[system_prompt],
             )
 
             # 5. Run the agent and let it think
