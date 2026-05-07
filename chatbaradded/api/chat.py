@@ -63,7 +63,8 @@ class handler(BaseHTTPRequestHandler):
                 table_name="chat_sessions",
                 db_url=sqlalchemy_url
             )
-
+            storage.create() # <-- THIS FORCES AGNO TO BUILD
+            
             # 4. Create the Unfiltered Agent
             agent = Agent(
                 model=OpenRouter(
