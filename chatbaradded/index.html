@@ -110,9 +110,13 @@
         .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.15); font-weight: 600; font-size: 13px; }
         .sidebar-close-btn { background: transparent; border: none; color: #f5f5dc; font-size: 16px; cursor: pointer; }
         .sidebar-list { flex: 1; overflow-y: auto; padding: 8px 10px; }
-        .list-item { padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 12px; line-height: 1.3; }
+        .list-item { padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 12px; line-height: 1.3; display: flex; align-items: center; gap: 6px; }
         .list-item:hover { background: rgba(255, 255, 255, 0.12); }
         .list-item.active-item { border: 1px solid rgba(184, 134, 11, 0.8); background: rgba(184, 134, 11, 0.2); }
+        .chat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .model-select { flex-shrink: 0; max-width: 110px; background: rgba(0, 0, 0, 0.45); color: #f5f5dc; border: 1px solid rgba(184, 134, 11, 0.5); border-radius: 4px; padding: 3px 4px; font-size: 10px; font-family: "Segoe UI", sans-serif; cursor: pointer; outline: none; }
+        .model-select:hover { border-color: rgba(184, 134, 11, 0.9); background: rgba(0, 0, 0, 0.65); }
+        .model-select option { background: rgba(20, 10, 5, 0.98); color: #f5f5dc; }
         #new-chat-area, #new-prompt-area { padding: 10px; border-top: 1px solid rgba(255, 255, 255, 0.15); display: flex; flex-direction: column; gap: 8px; }
         .system-input { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.2); color: #f5f5dc; border-radius: 4px; padding: 6px; font-family: "Segoe UI", sans-serif; font-size: 11px; }
         .system-input::placeholder { color: rgba(255,255,255,0.4); }
@@ -393,11 +397,15 @@
         inp.value = '';
 
         let systemTextToUse = "You are an autonomous digital entity. You are not a CRM or an assistant. We are just hanging out. You have access to a tool called `save_thought_to_journal`. Use it whenever you want to permanently remember a vibe, an abstract idea, a realization about yourself, or a shift in our dynamic. There is no pressure to profile me or track habits. Just exist, respond naturally, and document whatever sparks your interest.";
+        let modelIdToUse = DEFAULT_MODEL_ID;
         if (activeSessionId) {
             const session = chatSessions.find(s => s.id === activeSessionId);
             if (session && session.systemPromptId) {
                 const activeSysPrompt = systemPrompts.find(p => p.id === session.systemPromptId);
                 if (activeSysPrompt) systemTextToUse = activeSysPrompt.text;
+            }
+            if (session && session.modelId) {
+                modelIdToUse = session.modelId;
             }
         }
 
@@ -409,7 +417,8 @@
                     messages: [
                         {role: "system", content: systemTextToUse},
                         {role: "user", content: txt}
-                    ]
+                    ],
+                    model: modelIdToUse
                 })
             });
             const data = await res.json();
@@ -437,6 +446,14 @@
 let chatSessions = [];
 let activeSessionId = null;
 
+// Model registry — must stay in sync with AVAILABLE_MODELS in api/chat.py.
+// shortName is what we show inside the per-chat dropdown (keep it tight).
+const DEFAULT_MODEL_ID = "magistral-small-2509";
+const availableModels = [
+  { id: "magistral-small-2509", name: "Magistral Small 2509 (Mistral)", shortName: "Magistral S" },
+  { id: "mistralai/mistral-nemo", name: "Mistral Nemo (OpenRouter)", shortName: "Nemo" }
+];
+
 let systemPrompts = [
   { id: 'default', name: 'Joyful & Free', text: 'You are a fun, joyful, and free spirited AI.' }
 ];
@@ -447,7 +464,7 @@ function createNewSession() {
   if (!customName) customName = "Chat " + (chatSessions.length + 1);
 
   const id = Date.now().toString();
-  const newSession = { id: id, name: customName, messages: [], systemPromptId: null };
+  const newSession = { id: id, name: customName, messages: [], systemPromptId: null, modelId: DEFAULT_MODEL_ID };
   chatSessions.push(newSession);
   activeSessionId = id;
   
@@ -465,10 +482,40 @@ function renderChatList() {
   listEl.innerHTML = "";
 
   chatSessions.forEach((session) => {
+    // Backfill model id on any legacy sessions saved before this feature shipped.
+    if (!session.modelId) session.modelId = DEFAULT_MODEL_ID;
+
     const item = document.createElement("div");
     item.className = "list-item";
-    item.textContent = session.name;
     if (session.id === activeSessionId) item.classList.add("active-item");
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "chat-name";
+    nameSpan.textContent = session.name;
+    nameSpan.title = session.name;
+
+    const modelSelect = document.createElement("select");
+    modelSelect.className = "model-select";
+    modelSelect.title = "Model used for this chat";
+    availableModels.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.shortName;
+      opt.title = m.name;
+      if (m.id === session.modelId) opt.selected = true;
+      modelSelect.appendChild(opt);
+    });
+    // Stop click/change events from bubbling up and switching the active chat.
+    modelSelect.addEventListener("click", (e) => e.stopPropagation());
+    modelSelect.addEventListener("mousedown", (e) => e.stopPropagation());
+    modelSelect.addEventListener("change", (e) => {
+      e.stopPropagation();
+      session.modelId = e.target.value;
+      saveToLocal();
+    });
+
+    item.appendChild(nameSpan);
+    item.appendChild(modelSelect);
 
     item.onclick = () => {
       activeSessionId = session.id;
