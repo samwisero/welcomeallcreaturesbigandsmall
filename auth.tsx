@@ -248,7 +248,7 @@ export default function Page() {
 
   function validateEmail(v: string): string {
     if (!v) return "Email is required.";
-    // Light validation â Supabase enforces the real rules.
+    // Light validation — Supabase enforces the real rules.
     if (!/^\S+@\S+\.\S+$/.test(v)) return "That doesn't look like a valid email.";
     return "";
   }
@@ -423,7 +423,7 @@ export default function Page() {
             navigate("/");
           }}
         >
-          â Back to the flight
+          ← Back to the flight
         </a>
       </div>
     </div>

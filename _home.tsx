@@ -65,7 +65,7 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; background: #00
 
 .landing-title {
   font-family: 'Mokgech', serif;
-  /* Keep font-weight normal â Mokgech's character is in the strokes themselves */
+  /* Keep font-weight normal — Mokgech's character is in the strokes themselves */
   font-weight: normal;
   color: #f1dca7;
   text-transform: uppercase;
@@ -121,7 +121,7 @@ export default function Page() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // If the visitor is already signed in, skip the landing entirely.
-  // We DO NOT block render on this â the video starts immediately for everyone;
+  // We DO NOT block render on this — the video starts immediately for everyone;
   // a navigate call inside the effect happens before a frame is committed in
   // most cases when there IS a session.
   useEffect(() => {
@@ -164,7 +164,7 @@ export default function Page() {
           (promise as Promise<void>).catch(() => {});
         }
       } catch {
-        // ignore â fullscreen is a nice-to-have, not a requirement
+        // ignore — fullscreen is a nice-to-have, not a requirement
       }
     }
     navigate("/auth");

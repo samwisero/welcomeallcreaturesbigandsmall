@@ -85,11 +85,11 @@ export default function Page() {
 
     function done() {
       if (!active) return;
-      // Land them on chat â they're signed in now.
+      // Land them on chat — they're signed in now.
       navigate("/chat", { replace: true });
     }
 
-    // detectSessionInUrl is async â wait for SIGNED_IN, with a fallback poll.
+    // detectSessionInUrl is async — wait for SIGNED_IN, with a fallback poll.
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
       if (event === "SIGNED_IN" && session) done();
@@ -101,7 +101,7 @@ export default function Page() {
       if (data.session) done();
     });
 
-    // Hard timeout â if nothing happens, show a friendly error.
+    // Hard timeout — if nothing happens, show a friendly error.
     timeout = setTimeout(() => {
       if (active) {
         setError(
