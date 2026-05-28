@@ -16,6 +16,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // =====================================================================
 
 interface ChatMessage {
+  id: string;
   text: string;
   type: "user" | "ai";
 }
@@ -117,6 +118,12 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
 const STORAGE_CHATS_KEY = "wooden_chat_backup";
 const STORAGE_PROMPTS_KEY = "wooden_prompts_backup";
 const STORAGE_CUSTOM_MODELS_KEY = "wooden_custom_models";
+
+// Short, collision-resistant id. base36 of (epoch ms) + 4 random base36 chars.
+// Used for both chat session ids and message ids — same shape, same generator.
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
 
 // =====================================================================
 // Styles — kept inline so the whole page is one file, like the original
@@ -336,9 +343,8 @@ body {
 
 /* --- CHAT BUBBLES --- */
 .chat-bubble { position: relative; padding: 12px 16px; border-radius: 8px; max-width: 90%; word-wrap: break-word; font-family: 'Segoe UI', sans-serif; font-size: 13.5px; line-height: 1.5; animation: slideIn 0.3s ease; }
-.bubble-trash-btn { position: absolute; top: 4px; right: 4px; background: rgba(0, 0, 0, 0.3); border: none; color: rgba(245, 245, 220, 0.6); font-size: 11px; padding: 2px 5px; border-radius: 3px; cursor: pointer; opacity: 0.4; transition: opacity 0.15s ease, background 0.15s ease; line-height: 1; }
-.chat-bubble:hover .bubble-trash-btn, .chat-bubble:focus-within .bubble-trash-btn, .bubble-trash-btn:focus { opacity: 1; }
-.bubble-trash-btn:hover { background: rgba(180, 50, 40, 0.55); color: #ffd6d2; }
+.bubble-x-btn { position: absolute; top: 3px; right: 6px; background: transparent; border: none; color: #000; font-size: 13px; font-weight: 700; padding: 0 4px; cursor: pointer; line-height: 1; text-shadow: 0 0 4px rgba(255, 255, 255, 0.45); }
+.bubble-x-btn:hover { color: #1a0d05; text-shadow: 0 0 6px rgba(255, 255, 255, 0.7); }
 .bubble-confirm-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; align-items: center; flex-wrap: wrap; }
 .bubble-confirm-row .row-mini-btn { font-size: 11px; padding: 2px 7px; }
 .bubble-confirm-text { color: #ffd6d2; font-size: 11px; font-weight: 700; }
@@ -525,8 +531,9 @@ export default function Page() {
   // User-added models from the Add Model form. Persisted to localStorage.
   // Merged with built-in availableModels into the allModels list.
   const [customModels, setCustomModels] = useState<ModelOption[]>([]);
-  // Add Model form state (collapsed by default)
-  const [addModelOpen, setAddModelOpen] = useState(false);
+  // Add Model form state (the open/close toggle is no longer needed — the
+  // form lives inside the 🌙 popup as of Chunk 4 — but the field state is
+  // still needed for the form controls.)
   const [newModelProvider, setNewModelProvider] = useState<"nano-gpt" | "openrouter">("nano-gpt");
   const [newModelId, setNewModelId] = useState("");
   const [addModelFeedback, setAddModelFeedback] = useState<
@@ -538,6 +545,9 @@ export default function Page() {
   const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<
     { sessionId: string; index: number } | null
   >(null);
+  // Chunk 5 — bubble click-to-reveal selection (hidden ✕ becomes visible only
+  // when a bubble is selected). Cleared by clicking outside any bubble.
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   // Chunk 4 — close popup on Escape
   useEffect(() => {
@@ -548,6 +558,20 @@ export default function Page() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [settingsPopupOpen]);
+
+  // Chunk 5 — click-outside any chat-bubble clears bubble selection.
+  // The bubble itself stops mousedown propagation so its own click does the
+  // selecting work; this listener only fires for clicks elsewhere.
+  useEffect(() => {
+    if (!selectedMessageId) return;
+    const onDocDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest && target.closest(".chat-bubble")) return;
+      setSelectedMessageId(null);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [selectedMessageId]);
 
   const messagesRef = useRef<HTMLDivElement>(null);
 
@@ -587,10 +611,14 @@ export default function Page() {
       if (savedChatsRaw) {
         const parsed = JSON.parse(savedChatsRaw) as ChatSession[];
         if (Array.isArray(parsed)) {
-          // Backfill modelId for legacy sessions
+          // Backfill modelId for legacy sessions + assign ids to any messages
+          // that don't already have one (older chats predate per-message ids).
           const upgraded = parsed.map((s) => ({
             ...s,
             modelId: s.modelId || DEFAULT_MODEL_ID,
+            messages: Array.isArray(s.messages)
+              ? s.messages.map((m) => ({ ...m, id: m.id || generateId() }))
+              : [],
           }));
           setChatSessions(upgraded);
           if (upgraded.length > 0) {
@@ -633,13 +661,14 @@ export default function Page() {
   // model picker and by sendMessage for provider routing.
   const allModels: ModelOption[] = [...availableModels, ...customModels];
 
-  // --- Auto-create first chat if none exists after load ---
+  // --- Auto-create first chat if none exists after load OR after the user
+  // deletes all chats (so they never end up stranded with an empty sidebar) ---
   useEffect(() => {
     if (loaded && chatSessions.length === 0) {
       createNewSession();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
+  }, [loaded, chatSessions.length]);
 
   // --- Scroll messages to bottom when active session or its messages change ---
   useEffect(() => {
@@ -664,7 +693,7 @@ export default function Page() {
   // --- Actions ---
   function createNewSession() {
     const name = newChatName.trim() || `Chat ${chatSessions.length + 1}`;
-    const id = Date.now().toString();
+    const id = generateId();
     const newSession: ChatSession = {
       id,
       name,
@@ -774,10 +803,11 @@ export default function Page() {
     setNewPromptText("");
   }
 
-  function appendMessage(sessionId: string, msg: ChatMessage) {
+  function appendMessage(sessionId: string, msg: Omit<ChatMessage, "id">) {
+    const fullMsg: ChatMessage = { ...msg, id: generateId() };
     setChatSessions((prev) =>
       prev.map((s) =>
-        s.id === sessionId ? { ...s, messages: [...s.messages, msg] } : s,
+        s.id === sessionId ? { ...s, messages: [...s.messages, fullMsg] } : s,
       ),
     );
   }
@@ -1177,11 +1207,16 @@ export default function Page() {
                   confirmDeleteMessage !== null &&
                   confirmDeleteMessage.sessionId === activeSession.id &&
                   confirmDeleteMessage.index === i;
+                const isSelected = selectedMessageId === m.id;
                 return (
                   <div
-                    key={i}
+                    key={m.id}
                     className={`chat-bubble ${m.type}`}
                     style={{ fontSize: `${fontSize}px` }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!isConfirming) setSelectedMessageId(m.id);
+                    }}
                   >
                     <span>{m.text}</span>
                     {isConfirming ? (
@@ -1208,18 +1243,19 @@ export default function Page() {
                           ✕
                         </button>
                       </div>
-                    ) : (
+                    ) : isSelected ? (
                       <button
-                        className="bubble-trash-btn"
+                        className="bubble-x-btn"
                         title="Delete this message"
                         onClick={(e) => {
                           e.stopPropagation();
                           startDeleteMessage(activeSession.id, i);
+                          setSelectedMessageId(null);
                         }}
                       >
-                        🗑
+                        ✕
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 );
               })}
