@@ -886,6 +886,14 @@ export default function Page() {
       }
       messagesToSend.push({ role: "user", content: txt });
 
+      // Attach the Supabase access token so the backend can verify this is a
+      // signed-in caller before spending upstream credit. getSession() returns
+      // a freshly-refreshed token (autoRefreshToken is on by default).
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -893,6 +901,9 @@ export default function Page() {
           messages: messagesToSend,
           model: activeSession.modelId,
           provider: providerToSend,
+          // zo's public edge strips the Authorization header, so the Supabase
+          // access token rides in the body instead (it passes through intact).
+          accessToken,
         }),
       });
       const data = (await res.json()) as {
