@@ -130,6 +130,45 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
+// Supabase row <-> local session mapping for cross-device chat sync.
+interface ChatRow {
+  id: string;
+  name: string | null;
+  model_id: string | null;
+  system_prompt_id: string | null;
+  messages: ChatMessage[] | null;
+  updated_at?: string;
+}
+function rowToSession(r: ChatRow): ChatSession {
+  return {
+    id: r.id,
+    name: r.name ?? "Untitled chat",
+    messages: Array.isArray(r.messages) ? r.messages : [],
+    systemPromptId: r.system_prompt_id ?? null,
+    modelId: r.model_id || DEFAULT_MODEL_ID,
+  };
+}
+function sessionToRow(s: ChatSession) {
+  return {
+    id: s.id,
+    name: s.name,
+    model_id: s.modelId,
+    system_prompt_id: s.systemPromptId,
+    messages: s.messages,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+// Per-user preferences blob synced via the user_prefs table: settings, custom
+// models, and user-created system prompts (built-in prompts stay in code).
+interface UserPrefs {
+  fontIndex?: number;
+  walnutTheme?: boolean;
+  solidBubbles?: boolean;
+  customModels?: ModelOption[];
+  userPrompts?: SystemPrompt[];
+}
+
 // =====================================================================
 // Styles — kept inline so the whole page is one file, like the original
 // =====================================================================
@@ -529,6 +568,16 @@ export default function Page() {
   const [newPromptText, setNewPromptText] = useState("");
   const [inputText, setInputText] = useState("");
   const [loaded, setLoaded] = useState(false);
+  // True once chats have been reconciled with Supabase (sync done or failed).
+  // Gates cloud writes + first-chat auto-create so we never push a half-loaded
+  // state or auto-create a chat before the cloud chats have arrived.
+  const [cloudSynced, setCloudSynced] = useState(false);
+  // True ONLY when the cloud chat read succeeded. Gates auto-create + cloud
+  // writes so a FAILED read can never reseed the cloud from blank local state.
+  const [cloudReadOk, setCloudReadOk] = useState(false);
+  // TEMP diagnostic: shows the cloud-sync outcome on screen during testing.
+  const [syncStatus, setSyncStatus] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
   // Sidebar chat rename + delete UI state (Chunk 3)
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -662,6 +711,182 @@ export default function Page() {
     } catch {}
   }, [customModels, loaded]);
 
+  // Reconcile chats with Supabase so they follow the user across browsers and
+  // devices. Cloud is the source of truth; chats that exist only in this
+  // browser's localStorage are pushed up once (first-run convergence). Runs
+  // once, after the user is confirmed signed in and the local cache has loaded.
+  useEffect(() => {
+    if (authStatus !== "signedIn" || !loaded || cloudSynced) return;
+    let active = true;
+    (async () => {
+      let tokenRole = "none";
+      let uid: string | null = null;
+      let prefsNote = "prefs:?";
+      try {
+        // Re-apply the signed-in user's session to THIS client instance so its
+        // PostgREST calls carry the user token, not the anon key. Sign-in
+        // happened on a different page's client instance; without this, the chat
+        // page's client can talk to the database as anon and get denied.
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session) {
+          await supabase.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+          try {
+            const part = session.access_token
+              .split(".")[1]
+              .replace(/-/g, "+")
+              .replace(/_/g, "/");
+            const claims = JSON.parse(atob(part));
+            tokenRole = claims.role || "none";
+            uid = claims.sub || session.user?.id || null;
+          } catch {
+            uid = session.user?.id || null;
+          }
+        }
+        setUserId(uid);
+        const { data, error } = await supabase.from("chats").select("*");
+        if (!active) return;
+        if (error) {
+          setSyncStatus(
+            `sync read error ${error.code || ""}: ${error.message} (role=${tokenRole})`,
+          );
+          throw error;
+        }
+        // Cloud read succeeded — Supabase is the source of truth from here.
+        setCloudReadOk(true);
+        const cloudSessions = ((data as ChatRow[]) || []).map(rowToSession);
+        if (cloudSessions.length > 0) {
+          // Authoritative: show exactly what the cloud has. Do NOT push local
+          // entries up — blank/stale local reseeding the cloud was the bug.
+          setChatSessions(cloudSessions);
+          if (!cloudSessions.some((s) => s.id === activeSessionId)) {
+            setActiveSessionId(cloudSessions[cloudSessions.length - 1].id);
+          }
+        } else if (chatSessions.length > 0) {
+          // Cloud genuinely empty but this browser has local chats: a true
+          // first-time migration. Push them up once; keep showing them.
+          const { error: upErr } = await supabase
+            .from("chats")
+            .upsert(chatSessions.map(chatRow));
+          if (upErr) {
+            setSyncStatus(`migrate error ${upErr.code || ""}: ${upErr.message}`);
+          }
+        }
+        // Load synced settings + custom models + custom prompts (or migrate this
+        // browser's current ones up if the user has no prefs row yet).
+        try {
+          const { data: prefRows } = await supabase
+            .from("user_prefs")
+            .select("prefs")
+            .limit(1);
+          const prefs =
+            prefRows && prefRows[0] ? (prefRows[0].prefs as UserPrefs) : null;
+          const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
+          if (prefs) {
+            if (typeof prefs.fontIndex === "number") setFontIndex(prefs.fontIndex);
+            if (typeof prefs.walnutTheme === "boolean")
+              setWalnutTheme(prefs.walnutTheme);
+            if (typeof prefs.solidBubbles === "boolean")
+              setSolidBubbles(prefs.solidBubbles);
+            // Merge (union by id), never replace — an empty/stale cloud copy
+            // must not wipe prompts/models created in this browser. Anything
+            // local-only then gets pushed back up by the debounced save.
+            const cloudModels = Array.isArray(prefs.customModels)
+              ? prefs.customModels
+              : [];
+            setCustomModels((local) => {
+              const ids = new Set(local.map((m) => m.id));
+              return [...local, ...cloudModels.filter((m) => m && !ids.has(m.id))];
+            });
+            const cloudPrompts = Array.isArray(prefs.userPrompts)
+              ? prefs.userPrompts.filter((p) => p && !defaultIds.has(p.id))
+              : [];
+            setSystemPrompts((local) => {
+              const localUser = local.filter((p) => !defaultIds.has(p.id));
+              const ids = new Set(localUser.map((p) => p.id));
+              const union = [
+                ...localUser,
+                ...cloudPrompts.filter((p) => !ids.has(p.id)),
+              ];
+              return [...DEFAULT_PROMPTS, ...union];
+            });
+            prefsNote = `prefs-loaded(cloud=${cloudPrompts.length})`;
+          } else if (uid) {
+            const { error: pErr } = await supabase.from("user_prefs").upsert({
+              user_id: uid,
+              prefs: {
+                fontIndex,
+                walnutTheme,
+                solidBubbles,
+                customModels,
+                userPrompts: systemPrompts.filter((p) => !defaultIds.has(p.id)),
+              },
+              updated_at: new Date().toISOString(),
+            });
+            prefsNote = pErr
+              ? `prefs-ERR ${pErr.code || ""}:${pErr.message}`
+              : "prefs-migrated";
+          } else {
+            prefsNote = "prefs-no-uid";
+          }
+        } catch (pe) {
+          prefsNote = `prefs-EXC:${pe instanceof Error ? pe.message : String(pe)}`;
+        }
+        setSyncStatus((prev) =>
+          prev.startsWith("sync write error")
+            ? prev
+            : `synced ✓ chats=${cloudSessions.length} role=${tokenRole} uid=${uid ? "y" : "NO"} ${prefsNote}`,
+        );
+      } catch (e) {
+        if (active) {
+          // Cloud read failed: stay on the cached local view, mark it, and do
+          // NOT push or auto-create (cloudReadOk stays false). Retry next load.
+          setSyncStatus(
+            `⚠ offline — showing cached chats, not syncing (${e instanceof Error ? e.message : String(e)})`,
+          );
+        }
+      } finally {
+        if (active) setCloudSynced(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus, loaded, cloudSynced]);
+
+  // Push chat changes up to Supabase (debounced). Only after the initial
+  // reconcile, so a half-loaded state never overwrites the cloud copy.
+  useEffect(() => {
+    if (!cloudReadOk || chatSessions.length === 0) return;
+    const t = setTimeout(() => {
+      void supabase.from("chats").upsert(chatSessions.map(chatRow));
+    }, 800);
+    return () => clearTimeout(t);
+  }, [chatSessions, cloudReadOk]);
+
+  // Save settings + custom models + custom prompts (debounced). Built-in prompts
+  // are excluded; only the user's own prompts persist.
+  useEffect(() => {
+    if (!cloudReadOk || !userId) return;
+    const t = setTimeout(() => {
+      void savePrefsNow();
+    }, 800);
+    return () => clearTimeout(t);
+  }, [
+    fontIndex,
+    walnutTheme,
+    solidBubbles,
+    customModels,
+    systemPrompts,
+    cloudReadOk,
+    userId,
+  ]);
+
   // Merged model list (built-in + user-added). Used by the chat sidebar
   // model picker and by sendMessage for provider routing.
   const allModels: ModelOption[] = [...availableModels, ...customModels];
@@ -669,11 +894,11 @@ export default function Page() {
   // --- Auto-create first chat if none exists after load OR after the user
   // deletes all chats (so they never end up stranded with an empty sidebar) ---
   useEffect(() => {
-    if (loaded && chatSessions.length === 0) {
+    if (loaded && cloudReadOk && chatSessions.length === 0) {
       createNewSession();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, chatSessions.length]);
+  }, [loaded, cloudReadOk, chatSessions.length]);
 
   // --- Scroll messages to bottom when active session or its messages change ---
   useEffect(() => {
@@ -743,17 +968,33 @@ export default function Page() {
     setConfirmDeleteId(session.id);
   }
 
-  function confirmDeleteSession() {
+  // A chat row for upsert with the owner id stamped on when we know it
+  // (insurance vs the DB default; never stamp a blank id — that breaks RLS).
+  function chatRow(s: ChatSession) {
+    return userId ? { ...sessionToRow(s), user_id: userId } : sessionToRow(s);
+  }
+
+  async function confirmDeleteSession() {
     const id = confirmDeleteId;
     if (!id) return;
-    setChatSessions((prev) => {
-      const remaining = prev.filter((s) => s.id !== id);
-      if (id === activeSessionId) {
-        setActiveSessionId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-      }
-      return remaining;
-    });
+    // Optimistically remove, but keep the old state so we can put it back if the
+    // cloud delete fails — otherwise a failed delete reappears on next load.
+    const prevSessions = chatSessions;
+    const prevActive = activeSessionId;
+    const remaining = chatSessions.filter((s) => s.id !== id);
+    setChatSessions(remaining);
+    if (id === activeSessionId) {
+      setActiveSessionId(
+        remaining.length > 0 ? remaining[remaining.length - 1].id : null,
+      );
+    }
     setConfirmDeleteId(null);
+    const { error } = await supabase.from("chats").delete().eq("id", id);
+    if (error) {
+      setChatSessions(prevSessions);
+      setActiveSessionId(prevActive);
+      setSyncStatus("⚠ couldn't delete that chat — it's still saved, try again");
+    }
   }
 
   function cancelDeleteConfirm() {
@@ -765,17 +1006,27 @@ export default function Page() {
     setConfirmDeleteMessage({ sessionId, index });
   }
 
-  function confirmDeleteMessageNow() {
+  async function confirmDeleteMessageNow() {
     if (!confirmDeleteMessage) return;
     const { sessionId, index } = confirmDeleteMessage;
-    setChatSessions((prev) =>
-      prev.map((s) =>
-        s.id === sessionId
-          ? { ...s, messages: s.messages.filter((_, i) => i !== index) }
-          : s,
-      ),
-    );
+    const prevSessions = chatSessions;
+    let updated: ChatSession | null = null;
+    const next = chatSessions.map((s) => {
+      if (s.id !== sessionId) return s;
+      updated = { ...s, messages: s.messages.filter((_, i) => i !== index) };
+      return updated;
+    });
+    setChatSessions(next);
     setConfirmDeleteMessage(null);
+    // Persist the edited chat now and wait — a silent failed save would let the
+    // message reappear on reload. Restore + warn if it doesn't stick.
+    if (updated && cloudReadOk) {
+      const { error } = await supabase.from("chats").upsert(chatRow(updated));
+      if (error) {
+        setChatSessions(prevSessions);
+        setSyncStatus("⚠ couldn't delete that message — try again");
+      }
+    }
   }
 
   function cancelDeleteMessage() {
@@ -796,16 +1047,102 @@ export default function Page() {
     );
   }
 
+  // Persist prefs (settings + custom models + user prompts) to Supabase right
+  // now, not on a debounce a fast navigation could cancel. Used by the create
+  // handlers so a new prompt/model is saved the instant it's made. Falls back to
+  // deriving the user id from the JWT 'sub' if userId state isn't set yet.
+  async function savePrefsNow(opts: {
+    prompts?: SystemPrompt[];
+    models?: ModelOption[];
+  } = {}) {
+    let id = userId;
+    if (!id) {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const part = session?.access_token
+          ?.split(".")[1]
+          ?.replace(/-/g, "+")
+          .replace(/_/g, "/");
+        if (part) id = JSON.parse(atob(part)).sub || null;
+      } catch {}
+    }
+    if (!id) {
+      setSyncStatus(
+        "⚠ couldn't identify your account — saved on this device only",
+      );
+      return false;
+    }
+    const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
+    const localPrompts = (opts.prompts ?? systemPrompts).filter(
+      (p) => !defaultIds.has(p.id),
+    );
+    const localModels = opts.models ?? customModels;
+    try {
+      // Read-modify-write: union prompts/models with whatever the cloud row
+      // already has, so a concurrent tab's additions aren't clobbered. (Scalar
+      // settings stay last-write-wins; only collections need merging.)
+      const { data: existing } = await supabase
+        .from("user_prefs")
+        .select("prefs")
+        .limit(1);
+      const cloud = ((existing && existing[0] && existing[0].prefs) ||
+        {}) as UserPrefs;
+      const cloudPrompts = Array.isArray(cloud.userPrompts)
+        ? cloud.userPrompts.filter((p) => p && !defaultIds.has(p.id))
+        : [];
+      const cloudModels = Array.isArray(cloud.customModels)
+        ? cloud.customModels
+        : [];
+      const pIds = new Set(localPrompts.map((p) => p.id));
+      const mergedPrompts = [
+        ...localPrompts,
+        ...cloudPrompts.filter((p) => !pIds.has(p.id)),
+      ];
+      const mIds = new Set(localModels.map((m) => m.id));
+      const mergedModels = [
+        ...localModels,
+        ...cloudModels.filter((m) => m && !mIds.has(m.id)),
+      ];
+      const { error } = await supabase.from("user_prefs").upsert({
+        user_id: id,
+        prefs: {
+          fontIndex,
+          walnutTheme,
+          solidBubbles,
+          customModels: mergedModels,
+          userPrompts: mergedPrompts,
+        },
+        updated_at: new Date().toISOString(),
+      });
+      if (error) {
+        setSyncStatus(
+          `⚠ cloud sync failed (${error.code || ""}) — saved on this device, will retry on reload`,
+        );
+        return false;
+      }
+      return true;
+    } catch {
+      setSyncStatus(
+        "⚠ cloud sync failed — saved on this device, will retry on reload",
+      );
+      return false;
+    }
+  }
+
   function saveNewPrompt() {
     const name = newPromptName.trim();
     const text = newPromptText.trim();
     if (!name || !text) return;
     const id = "prompt_" + Date.now().toString();
     const newPrompt: SystemPrompt = { id, name, text };
-    setSystemPrompts((prev) => [...prev, newPrompt]);
+    const next = [...systemPrompts, newPrompt];
+    setSystemPrompts(next);
     if (activeSessionId) setChatSystemPrompt(activeSessionId, id);
     setNewPromptName("");
     setNewPromptText("");
+    void savePrefsNow({ prompts: next });
   }
 
   function appendMessage(sessionId: string, msg: Omit<ChatMessage, "id">) {
@@ -835,7 +1172,9 @@ export default function Page() {
       shortName,
       provider: newModelProvider,
     };
-    setCustomModels((prev) => [...prev, model]);
+    const next = [...customModels, model];
+    setCustomModels(next);
+    void savePrefsNow({ models: next });
     return { ok: true };
   }
 
@@ -963,6 +1302,26 @@ export default function Page() {
   return (
     <div className={themeClasses}>
       <style>{css}</style>
+
+      {syncStatus && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 8,
+            left: 8,
+            zIndex: 300,
+            background: "rgba(0,0,0,0.82)",
+            color: syncStatus.startsWith("synced") ? "#9ed68c" : "#ffb3a8",
+            font: "11px/1.4 monospace",
+            padding: "5px 9px",
+            borderRadius: 5,
+            maxWidth: "92vw",
+            pointerEvents: "none",
+          }}
+        >
+          {syncStatus}
+        </div>
+      )}
 
       <button className="chats-toggle-btn" onClick={openChats}>
         Chats
