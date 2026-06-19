@@ -12,6 +12,20 @@ const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lbGZ4enNhZW5xbW14dG5ob2V4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxOTYwNTYsImV4cCI6MjA5Mjc3MjA1Nn0.iaLuNX0e8o_ks4Cd3S1W-4-BI60zyfIY1Mmqjaw_1zM";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// POST to the cloud chat route. The Supabase access token rides in the BODY
+// because zo's public edge strips the Authorization header.
+async function postTranscripts(payload: Record<string, unknown>) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const res = await fetch("/api/transcripts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
+  });
+  return res.json();
+}
+
 // =====================================================================
 // Types
 // =====================================================================
@@ -92,7 +106,6 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
   },
 ];
 
-const STORAGE_CHATS_KEY = "wooden_chat_backup";
 const STORAGE_PROMPTS_KEY = "wooden_prompts_backup";
 const STORAGE_CUSTOM_MODELS_KEY = "wooden_custom_models";
 
@@ -318,6 +331,10 @@ body {
 .input-centered .wood-chat-header { display: none; }
 .header-chat-name { font-size: 1.4em; font-weight: 700; color: #f5f5dc; font-family: 'Segoe UI', sans-serif; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
 .header-prompt-name { font-size: 0.9em; font-weight: 700; color: #d4a017; font-family: 'Segoe UI', sans-serif; font-style: italic; letter-spacing: 0.02em; text-shadow: 0 1px 3px rgba(0,0,0,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.save-pill { align-self: center; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-family: "Segoe UI", sans-serif; }
+.save-pill.saving { background: rgba(255,255,255,0.15); color: #f5f5dc; }
+.save-pill.saved { background: rgba(120,180,90,0.35); color: #eaffe0; }
+.save-pill.error { background: rgba(200,70,60,0.5); color: #ffd6d2; cursor: pointer; }
 .wood-chat-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; pointer-events: auto; scrollbar-width: none; transition: opacity 0.5s ease; }
 .wood-chat-messages::-webkit-scrollbar { display: none; }
 .input-centered .wood-chat-messages { display: none; }
@@ -505,7 +522,10 @@ export default function Page() {
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
   const [inputText, setInputText] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [cloudReadDone, setCloudReadDone] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   // Sidebar chat rename + delete UI state (Chunk 3)
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -556,88 +576,91 @@ export default function Page() {
   }, [selectedMessageId]);
 
   const messagesRef = useRef<HTMLDivElement>(null);
+  const didInitRef = useRef(false);
 
-  // --- Load from localStorage on mount ---
+  // --- Load: prompts + custom models from localStorage; CHATS from the cloud ---
   useEffect(() => {
+    // Prompts + custom models stay local this chunk (moving them to the cloud
+    // is a later chunk). Chats now come from /api/transcripts.
     try {
-      const savedChatsRaw = localStorage.getItem(STORAGE_CHATS_KEY);
       const savedPromptsRaw = localStorage.getItem(STORAGE_PROMPTS_KEY);
       if (savedPromptsRaw) {
         const parsed = JSON.parse(savedPromptsRaw) as SystemPrompt[];
         if (Array.isArray(parsed)) {
-          // Always merge in current DEFAULT_PROMPTS at the top so new built-in
-          // presets (like Bold & Free) reach users with older localStorage
-          // data. User-created prompts are preserved.
           const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
           const userOnly = parsed.filter((p) => !defaultIds.has(p.id));
           setSystemPrompts([...DEFAULT_PROMPTS, ...userOnly]);
         }
       }
-
-      // Load user-added custom models
       const savedCustomModelsRaw = localStorage.getItem(STORAGE_CUSTOM_MODELS_KEY);
       if (savedCustomModelsRaw) {
-        try {
-          const parsed = JSON.parse(savedCustomModelsRaw) as ModelOption[];
-          if (Array.isArray(parsed)) {
-            const valid = parsed.filter(
-              (m) =>
-                m &&
-                typeof m.id === "string" &&
-                (m.provider === "venice" || m.provider === "openrouter"),
-            );
-            setCustomModels(valid);
-          }
-        } catch {}
-      }
-      if (savedChatsRaw) {
-        const parsed = JSON.parse(savedChatsRaw) as ChatSession[];
+        const parsed = JSON.parse(savedCustomModelsRaw) as ModelOption[];
         if (Array.isArray(parsed)) {
-          // Backfill modelId for legacy sessions + assign ids to any messages
-          // that don't already have one (older chats predate per-message ids).
-          const upgraded = parsed.map((s) => ({
-            ...s,
-            modelId: s.modelId || DEFAULT_MODEL_ID,
-            messages: Array.isArray(s.messages)
-              ? s.messages.map((m) => ({ ...m, id: m.id || generateId() }))
-              : [],
-          }));
-          setChatSessions(upgraded);
-          if (upgraded.length > 0) {
-            setActiveSessionId(upgraded[upgraded.length - 1].id);
-          }
+          const valid = parsed.filter(
+            (m) =>
+              m &&
+              typeof m.id === "string" &&
+              (m.provider === "venice" || m.provider === "openrouter"),
+          );
+          setCustomModels(valid);
         }
       }
     } catch (err) {
-      console.error("Failed to load from localStorage", err);
+      console.error("Failed to load prefs from localStorage", err);
     }
-    setLoaded(true);
+
+    // Chats from the cloud. Set cloudReadDone in finally so the debounced save
+    // (H4) can never fire — and overwrite the cloud with empty — before this.
+    (async () => {
+      try {
+        const { sessions } = await postTranscripts({ action: "load" });
+        const list: ChatSession[] = Array.isArray(sessions) ? sessions : [];
+        const upgraded = list.map((s) => ({
+          ...s,
+          modelId: s.modelId || DEFAULT_MODEL_ID,
+          messages: Array.isArray(s.messages)
+            ? s.messages.map((m) => ({ ...m, id: m.id || generateId() }))
+            : [],
+        }));
+        setChatSessions(upgraded);
+        if (upgraded.length > 0) {
+          setActiveSessionId(upgraded[upgraded.length - 1].id);
+        }
+      } catch (err) {
+        console.error("Cloud chat load failed", err);
+      } finally {
+        setCloudReadDone(true);
+      }
+    })();
   }, []);
 
   // --- Persist to localStorage whenever they change (after initial load) ---
   useEffect(() => {
-    if (!loaded) return;
-    try {
-      localStorage.setItem(STORAGE_CHATS_KEY, JSON.stringify(chatSessions));
-    } catch {}
-  }, [chatSessions, loaded]);
+    if (!cloudReadDone) return;
+    const t = setTimeout(async () => {
+      setSaveStatus("saving");
+      const res = await postTranscripts({ action: "save", sessions: chatSessions });
+      setSaveStatus(res && res.ok ? "saved" : "error");
+    }, 800);
+    return () => clearTimeout(t);
+  }, [chatSessions, cloudReadDone]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!cloudReadDone) return;
     try {
       localStorage.setItem(STORAGE_PROMPTS_KEY, JSON.stringify(systemPrompts));
     } catch {}
-  }, [systemPrompts, loaded]);
+  }, [systemPrompts, cloudReadDone]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!cloudReadDone) return;
     try {
       localStorage.setItem(
         STORAGE_CUSTOM_MODELS_KEY,
         JSON.stringify(customModels),
       );
     } catch {}
-  }, [customModels, loaded]);
+  }, [customModels, cloudReadDone]);
 
   // Merged model list (built-in + user-added). Used by the chat sidebar
   // model picker and by sendMessage for provider routing.
@@ -646,11 +669,11 @@ export default function Page() {
   // --- Auto-create first chat if none exists after load OR after the user
   // deletes all chats (so they never end up stranded with an empty sidebar) ---
   useEffect(() => {
-    if (loaded && chatSessions.length === 0) {
-      createNewSession();
-    }
+    if (!cloudReadDone || didInitRef.current) return;
+    didInitRef.current = true;
+    if (chatSessions.length === 0) createNewSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, chatSessions.length]);
+  }, [cloudReadDone, chatSessions.length]);
 
   // --- Scroll messages to bottom when active session or its messages change ---
   useEffect(() => {
@@ -893,6 +916,12 @@ export default function Page() {
       const msg = err instanceof Error ? err.message : String(err);
       appendMessage(sid, { text: `Oops, silence... (${msg})`, type: "ai" });
     }
+  }
+
+  async function retrySaveNow() {
+    setSaveStatus("saving");
+    const res = await postTranscripts({ action: "save", sessions: chatSessions });
+    setSaveStatus(res && res.ok ? "saved" : "error");
   }
 
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -1206,6 +1235,19 @@ export default function Page() {
                   ? `Prompt: ${systemPrompts.find((p) => p.id === activeSession.systemPromptId)?.name ?? ""}`
                   : "No System Prompt Selected"}
               </div>
+              {saveStatus !== "idle" && (
+                <div
+                  className={`save-pill ${saveStatus}`}
+                  onClick={saveStatus === "error" ? retrySaveNow : undefined}
+                  title={saveStatus === "error" ? "Click to retry" : undefined}
+                >
+                  {saveStatus === "saving"
+                    ? "Saving…"
+                    : saveStatus === "saved"
+                      ? "Saved"
+                      : "Save failed — retry"}
+                </div>
+              )}
             </div>
 
             <div className="wood-chat-messages" ref={messagesRef}>
