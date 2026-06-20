@@ -489,12 +489,16 @@ export default function Page() {
   const [authStatus, setAuthStatus] = useState<"checking" | "signedIn" | "signedOut">(
     "checking",
   );
+  // The user id we believe this tab belongs to. Used to catch a session that
+  // silently swaps to a DIFFERENT user (multi-tab / account switch).
+  const currentUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       if (data.session) {
+        currentUserIdRef.current = data.session.user.id;
         setAuthStatus("signedIn");
       } else {
         setAuthStatus("signedOut");
@@ -503,7 +507,24 @@ export default function Page() {
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!active) return;
-      if (!session) {
+      // Cross-account guard: if the session is now a DIFFERENT user than the one
+      // whose data this tab loaded, drop everything and bounce to /auth. Stops a
+      // stale tab from showing or saving the previous user's chats after a swap.
+      if (
+        session &&
+        currentUserIdRef.current &&
+        session.user.id !== currentUserIdRef.current
+      ) {
+        currentUserIdRef.current = null;
+        setAuthStatus("signedOut");
+        supabase.auth.signOut().finally(() =>
+          navigate("/auth", { replace: true }),
+        );
+        return;
+      }
+      if (session) {
+        currentUserIdRef.current = session.user.id;
+      } else {
         setAuthStatus("signedOut");
         navigate("/auth", { replace: true });
       }
