@@ -220,26 +220,25 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
 
-  // If a session already exists, skip the auth page.
+  // Start every visit to /auth from a clean slate: wipe any session still held
+  // in the in-memory Supabase client before showing the form. Without this, a
+  // stale session (e.g. account A restored from storage) would auto-forward to
+  // /chat as A, or race a fresh sign-in as B.
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      if (data.session) {
-        navigate("/chat", { replace: true });
-      } else {
-        setSessionChecked(true);
-      }
+    supabase.auth.signOut().finally(() => {
+      if (active) setSessionChecked(true);
     });
     return () => {
       active = false;
     };
-  }, [navigate]);
+  }, []);
 
-  // Live-react to sign-in events from other tabs / email confirmation.
+  // Navigate to /chat only on an actual sign-in event — never on the initial
+  // (possibly stale) session, which the clean-slate signOut above is clearing.
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session: Session | null) => {
-      if (session) {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session: Session | null) => {
+      if (event === "SIGNED_IN" && session) {
         navigate("/chat", { replace: true });
       }
     });
