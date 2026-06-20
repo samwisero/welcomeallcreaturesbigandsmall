@@ -26,6 +26,19 @@ async function postTranscripts(payload: Record<string, unknown>) {
   return res.json();
 }
 
+// Same as postTranscripts but for the prefs route (prompts + custom models).
+async function postPrefs(payload: Record<string, unknown>) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const res = await fetch("/api/prefs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
+  });
+  return res.json();
+}
+
 // =====================================================================
 // Types
 // =====================================================================
@@ -106,8 +119,6 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
   },
 ];
 
-const STORAGE_PROMPTS_KEY = "wooden_prompts_backup";
-const STORAGE_CUSTOM_MODELS_KEY = "wooden_custom_models";
 
 // Cap how many prior turns we send upstream so token usage stays bounded on
 // long chats. The full history still renders + saves locally; only the model
@@ -526,6 +537,7 @@ export default function Page() {
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
+  const [prefsReadDone, setPrefsReadDone] = useState(false);
   // Sidebar chat rename + delete UI state (Chunk 3)
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -578,36 +590,35 @@ export default function Page() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const didInitRef = useRef(false);
 
-  // --- Load: prompts + custom models from localStorage; CHATS from the cloud ---
+  // --- Load: prompts + custom models AND chats, all from the cloud ---
   useEffect(() => {
-    // Prompts + custom models stay local this chunk (moving them to the cloud
-    // is a later chunk). Chats now come from /api/transcripts.
-    try {
-      const savedPromptsRaw = localStorage.getItem(STORAGE_PROMPTS_KEY);
-      if (savedPromptsRaw) {
-        const parsed = JSON.parse(savedPromptsRaw) as SystemPrompt[];
-        if (Array.isArray(parsed)) {
-          const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
-          const userOnly = parsed.filter((p) => !defaultIds.has(p.id));
-          setSystemPrompts([...DEFAULT_PROMPTS, ...userOnly]);
-        }
+    // Prompts + custom models now come from the cloud (user_prefs). DEFAULT_PROMPTS
+    // are always merged on top so the built-in presets exist. prefsReadDone gates
+    // the prefs save so the first render can't overwrite the cloud.
+    (async () => {
+      try {
+        const { prefs } = await postPrefs({ action: "load" });
+        const cloudPrompts: SystemPrompt[] = Array.isArray(prefs?.userPrompts)
+          ? prefs.userPrompts
+          : [];
+        const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
+        const userOnly = cloudPrompts.filter((p) => p && !defaultIds.has(p.id));
+        setSystemPrompts([...DEFAULT_PROMPTS, ...userOnly]);
+        const cloudModels: ModelOption[] = Array.isArray(prefs?.customModels)
+          ? prefs.customModels.filter(
+              (m: ModelOption) =>
+                m &&
+                typeof m.id === "string" &&
+                (m.provider === "venice" || m.provider === "openrouter"),
+            )
+          : [];
+        setCustomModels(cloudModels);
+      } catch (err) {
+        console.error("Cloud prefs load failed", err);
+      } finally {
+        setPrefsReadDone(true);
       }
-      const savedCustomModelsRaw = localStorage.getItem(STORAGE_CUSTOM_MODELS_KEY);
-      if (savedCustomModelsRaw) {
-        const parsed = JSON.parse(savedCustomModelsRaw) as ModelOption[];
-        if (Array.isArray(parsed)) {
-          const valid = parsed.filter(
-            (m) =>
-              m &&
-              typeof m.id === "string" &&
-              (m.provider === "venice" || m.provider === "openrouter"),
-          );
-          setCustomModels(valid);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to load prefs from localStorage", err);
-    }
+    })();
 
     // Chats from the cloud. Set cloudReadDone in finally so the debounced save
     // (H4) can never fire — and overwrite the cloud with empty — before this.
@@ -645,22 +656,22 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [chatSessions, cloudReadDone]);
 
+  // Persist prompts + custom models to the cloud (debounced; awaited with error
+  // handling so failures surface in the save pill — no fire-and-forget).
   useEffect(() => {
-    if (!cloudReadDone) return;
-    try {
-      localStorage.setItem(STORAGE_PROMPTS_KEY, JSON.stringify(systemPrompts));
-    } catch {}
-  }, [systemPrompts, cloudReadDone]);
-
-  useEffect(() => {
-    if (!cloudReadDone) return;
-    try {
-      localStorage.setItem(
-        STORAGE_CUSTOM_MODELS_KEY,
-        JSON.stringify(customModels),
-      );
-    } catch {}
-  }, [customModels, cloudReadDone]);
+    if (!prefsReadDone) return;
+    const t = setTimeout(async () => {
+      const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
+      const userPrompts = systemPrompts.filter((p) => !defaultIds.has(p.id));
+      setSaveStatus("saving");
+      const res = await postPrefs({
+        action: "save",
+        prefs: { userPrompts, customModels },
+      });
+      setSaveStatus(res && res.ok ? "saved" : "error");
+    }, 800);
+    return () => clearTimeout(t);
+  }, [systemPrompts, customModels, prefsReadDone]);
 
   // Merged model list (built-in + user-added). Used by the chat sidebar
   // model picker and by sendMessage for provider routing.
