@@ -144,9 +144,18 @@ export default async function handler(c: Context): Promise<Response> {
     );
   }
 
+  // Server-side cap on message history. Client caps at 40 (see MAX_HISTORY in
+  // /chat); this is a slightly-larger guardrail so a misbehaving client can't
+  // burn upstream credit. Matches the API contract: clients chunk or trim.
+  const MAX_HISTORY_SERVER = 60;
   const messages = Array.isArray(body.messages) ? body.messages : [];
   if (messages.length === 0) {
     return envelope("System: no messages were supplied.");
+  }
+  if (messages.length > MAX_HISTORY_SERVER) {
+    return envelope(
+      `System: conversation too long for one request (${messages.length} messages, max ${MAX_HISTORY_SERVER}). Please start a new chat.`,
+    );
   }
 
   const modelId = body.model || DEFAULT_MODEL_ID;

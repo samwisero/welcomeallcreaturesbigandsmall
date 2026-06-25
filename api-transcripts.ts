@@ -98,15 +98,28 @@ export default async function handler(c: Context): Promise<Response> {
     }
 
     // Delete-reconcile: read this user's cloud ids (RLS-scoped), delete only the
-    // stale ones (not in the current set), in batches of 50. No giant not.in URL.
+    // stale ones (those not in the current keep-set) in ONE roundtrip via the
+    // PostgREST not.in. operator. The keep-set is the small one in practice
+    // (usually <50), so the query string stays well under URL length limits.
+    //
+    // Belt-and-suspenders: the SAVE branch above already short-circuits when
+    // sessions.length === 0, so we never reach here with an empty keep-set. We
+    // assert it defensively anyway — an empty not.in.() means "match nothing",
+    // which would silently delete every cloud row for this user.
     const keep = new Set(rows.map((r) => r.id));
+    if (keep.size === 0) {
+      return c.json({ ok: true, saved: rows.length, note: "skipped reconcile: empty keep-set" });
+    }
     const cur = await fetch(`${REST}?select=id`, { headers: H });
     if (cur.ok) {
       const ids = (await cur.json()) as Array<{ id: string }>;
-      const stale = ids.map((x) => x.id).filter((id) => !keep.has(id));
-      for (let i = 0; i < stale.length; i += 50) {
-        const batch = stale.slice(i, i + 50).map((id) => encodeURIComponent(id)).join(",");
-        await fetch(`${REST}?id=in.(${batch})`, { method: "DELETE", headers: H });
+      const hasStale = ids.some((x) => !keep.has(x.id));
+      if (hasStale) {
+        const keepList = [...keep].map((id) => encodeURIComponent(id)).join(",");
+        await fetch(
+          `${REST}?id=not.in.(${keepList})&user_id=eq.${encodeURIComponent(user.id)}`,
+          { method: "DELETE", headers: H },
+        );
       }
     }
     return c.json({ ok: true, saved: rows.length });

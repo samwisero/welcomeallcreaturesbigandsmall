@@ -123,11 +123,22 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
 // Cap how many prior turns we send upstream so token usage stays bounded on
 // long chats. The full history still renders + saves locally; only the model
 // payload is trimmed to the most recent MAX_HISTORY messages.
+//
+// Why 40: ~20 exchanges of context. Long enough for the model to follow
+// ongoing argument, short enough that a typical 8B-13B chat model stays
+// comfortably within its context window. The /api/chat route enforces a
+// slightly larger server-side cap (60) as a guardrail.
 const MAX_HISTORY = 40;
 
 // Short, collision-resistant id. base36 of (epoch ms) + 4 random base36 chars.
 // Used for both chat session ids and message ids — same shape, same generator.
 function generateId(): string {
+  // crypto.randomUUID is universally available in modern browsers and gives
+  // true uniqueness. Fallback preserved for environments where crypto isn't
+  // exposed (older Safari private mode, certain test runners).
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
@@ -525,6 +536,9 @@ export default function Page() {
       if (session) {
         currentUserIdRef.current = session.user.id;
       } else {
+        // Reset baseline so a later session for a DIFFERENT user starts from
+        // a known-clean ref instead of whatever the previous user left in it.
+        currentUserIdRef.current = null;
         setAuthStatus("signedOut");
         navigate("/auth", { replace: true });
       }
@@ -555,9 +569,23 @@ export default function Page() {
   const [newPromptText, setNewPromptText] = useState("");
   const [inputText, setInputText] = useState("");
   const [cloudReadDone, setCloudReadDone] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<
+  // Per-effect save status. The rendered pill is derived as "worst of" so a
+  // saving/error from one path can't be hidden by a successful save in the
+  // other. chatsSave = the cloud chats write; prefsSave = the user_prefs write.
+  const [chatsSave, setChatsSave] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
+  const [prefsSave, setPrefsSave] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const saveStatus: "idle" | "saving" | "saved" | "error" =
+    chatsSave === "error" || prefsSave === "error"
+      ? "error"
+      : chatsSave === "saving" || prefsSave === "saving"
+        ? "saving"
+        : chatsSave === "saved" && prefsSave === "saved"
+          ? "saved"
+          : "idle";
   const [prefsReadDone, setPrefsReadDone] = useState(false);
   // Sidebar chat rename + delete UI state (Chunk 3)
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -666,13 +694,14 @@ export default function Page() {
     })();
   }, []);
 
-  // --- Persist to localStorage whenever they change (after initial load) ---
+  // Persist chats to the cloud (debounced; awaited with explicit error
+  // handling so failures surface in the save pill — no fire-and-forget).
   useEffect(() => {
     if (!cloudReadDone) return;
     const t = setTimeout(async () => {
-      setSaveStatus("saving");
+      setChatsSave("saving");
       const res = await postTranscripts({ action: "save", sessions: chatSessions });
-      setSaveStatus(res && res.ok ? "saved" : "error");
+      setChatsSave(res && res.ok ? "saved" : "error");
     }, 800);
     return () => clearTimeout(t);
   }, [chatSessions, cloudReadDone]);
@@ -684,12 +713,12 @@ export default function Page() {
     const t = setTimeout(async () => {
       const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
       const userPrompts = systemPrompts.filter((p) => !defaultIds.has(p.id));
-      setSaveStatus("saving");
+      setPrefsSave("saving");
       const res = await postPrefs({
         action: "save",
         prefs: { userPrompts, customModels },
       });
-      setSaveStatus(res && res.ok ? "saved" : "error");
+      setPrefsSave(res && res.ok ? "saved" : "error");
     }, 800);
     return () => clearTimeout(t);
   }, [systemPrompts, customModels, prefsReadDone]);
@@ -951,9 +980,18 @@ export default function Page() {
   }
 
   async function retrySaveNow() {
-    setSaveStatus("saving");
-    const res = await postTranscripts({ action: "save", sessions: chatSessions });
-    setSaveStatus(res && res.ok ? "saved" : "error");
+    setChatsSave("saving");
+    setPrefsSave("saving");
+    const [tRes, pRes] = await Promise.all([
+      postTranscripts({ action: "save", sessions: chatSessions }),
+      (() => {
+        const defaultIds = new Set(DEFAULT_PROMPTS.map((p) => p.id));
+        const userPrompts = systemPrompts.filter((p) => !defaultIds.has(p.id));
+        return postPrefs({ action: "save", prefs: { userPrompts, customModels } });
+      })(),
+    ]);
+    setChatsSave(tRes && tRes.ok ? "saved" : "error");
+    setPrefsSave(pRes && pRes.ok ? "saved" : "error");
   }
 
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
