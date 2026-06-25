@@ -20,11 +20,11 @@ export const NANO_GPT_API_KEY: string = requireEnv("NANO_GPT_API_KEY");
 export const NANO_GPT_BASE_URL: string = optionalEnv("NANO_GPT_BASE_URL", "https://nano-gpt.com/api/v1");
 export const CHAT_MODEL: string = optionalEnv("CHAT_MODEL", "TEE/qwen3.6-35b-a3b-uncensored");
 
-// --- Embeddings: OpenRouter (Qwen3-Embedding-8B, 4096-dim). Do not swap models.
+// --- Embeddings: OpenRouter (Qwen3-Embedding-8B, 1536-dim via Matryoshka truncation). Do not swap models.
 export const OPENROUTER_API_KEY: string = requireEnv("OPENROUTER_API_KEY");
 export const OPENROUTER_BASE_URL: string = "https://openrouter.ai/api/v1";
 export const EMBED_MODEL: string = optionalEnv("EMBED_MODEL", "qwen/qwen3-embedding-8b");
-export const EMBED_DIM: number = Number(optionalEnv("EMBED_DIM", "4096"));
+export const EMBED_DIM: number = Number(optionalEnv("EMBED_DIM", "1536"));
 export const EMBED_INPUT_CHAR_CAP: number = Number(process.env.EMBED_INPUT_CHAR_CAP ?? 8000);
 
 // --- Database (Supabase via Supavisor session pooler, port 5432, SSL). Discrete

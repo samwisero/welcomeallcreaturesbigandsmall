@@ -1,9 +1,10 @@
 /**
  * repository.ts -- the only place SQL lives. Multi-tenant: every query reads
  * the request's tenant context (userId + beingId) via getCtx() and scopes to
- * it. Semantic search is EXACT cosine over the tenant-filtered set (no ANN
- * index: our 4096-dim Qwen vectors exceed pgvector's 2000-dim index limit, and
- * per-being sets are small).
+ * it. Semantic search now uses HNSW indexed cosine over the tenant-filtered set.
+ * We moved Qwen3-Embedding-8B to 1536-dim Matryoshka truncation, which keeps
+ * us under pgvector's HNSW limit. Existing rows had their embeddings nulled;
+ * new writes store 1536-dim vectors and are searchable again.
  */
 import { getPool } from "./client.ts";
 import { EMBED_INPUT_CHAR_CAP, EMBED_DIM } from "../config.ts";
