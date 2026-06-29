@@ -184,7 +184,7 @@ const css = `
 html, body, #root { width: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
 
 body {
-  background-image: url('/images/arkansas.jpg');
+  background-image: url('/images/arkansas.webp');
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
@@ -198,7 +198,7 @@ body {
 }
 
 .centered-box {
-  background-image: url('/images/detailedwood_sides_trimmed.png');
+  background-image: url('/images/detailedwood_sides_trimmed.webp');
   background-size: 100% 100%; background-position: center; background-repeat: no-repeat;
   width: 95%; max-width: 1665px; height: auto; aspect-ratio: 16 / 9;
   pointer-events: auto; flex-shrink: 0; position: relative;
@@ -1534,7 +1534,7 @@ export default function Page() {
                     autoComplete="off"
                   />
                   <p style={{ fontSize: "10px", color: "rgba(245, 245, 220, 0.55)", marginTop: "4px", lineHeight: 1.3 }}>
-                    The model's total context window in tokens (check the provider's docs). Common: 8K=8000, 32K=32000, 128K=131000, 256K=262000.
+                    The model's total context window in tokens (check the provider's docs). Common: 8K=8192, 32K=32768, 128K=131072, 256K=262144.
                   </p>
                 </div>
                 <div className="row">
