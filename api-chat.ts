@@ -50,16 +50,12 @@ type Provider = "venice" | "openrouter";
 
 interface BuiltInModel {
   provider: Provider;
+  contextWindow?: number; // total context window in tokens
 }
 
 const BUILT_IN_MODELS: Record<string, BuiltInModel> = {
-  "gemma-4-uncensored": { provider: "venice" },
-  "venice-uncensored-1-2": { provider: "venice" },
-  "e2ee-qwen3-6-35b-a3b-uncensored-p": { provider: "venice" },
-  "e2ee-gemma-4-26b-a4b-uncensored-p": { provider: "venice" },
-  "sao10k/l3.3-euryale-70b": { provider: "openrouter" },
-  "nousresearch/hermes-3-llama-3.1-70b": { provider: "openrouter" },
-  "moonshotai/kimi-k2.6": { provider: "openrouter" },
+  "gemma-4-uncensored": { provider: "venice", contextWindow: 262144 }, // 256K
+  "e2ee-gemma-4-26b-a4b-uncensored-p": { provider: "venice", contextWindow: 65536 }, // 64K
 };
 
 interface RequestBody {
@@ -144,21 +140,28 @@ export default async function handler(c: Context): Promise<Response> {
     );
   }
 
-  // Server-side cap on message history. Client caps at 40 (see MAX_HISTORY in
-  // /chat); this is a slightly-larger guardrail so a misbehaving client can't
-  // burn upstream credit. Matches the API contract: clients chunk or trim.
-  const MAX_HISTORY_SERVER = 60;
   const messages = Array.isArray(body.messages) ? body.messages : [];
   if (messages.length === 0) {
     return envelope("System: no messages were supplied.");
   }
-  if (messages.length > MAX_HISTORY_SERVER) {
-    return envelope(
-      `System: conversation too long for one request (${messages.length} messages, max ${MAX_HISTORY_SERVER}). Please start a new chat.`,
-    );
-  }
 
   const modelId = body.model || DEFAULT_MODEL_ID;
+
+  // Token-aware backstop (mirrors the client's chars/4 estimate). The client
+  // already trims history well under the model's window, so a legit request is
+  // always under this; it only rejects truly abusive payloads. Unknown/custom
+  // model ids fall back to a generous default.
+  const SERVER_CTX_FALLBACK = 262144; // 256K, matches the largest built-in
+  const modelCtx = BUILT_IN_MODELS[modelId]?.contextWindow ?? SERVER_CTX_FALLBACK;
+  const estTokens = messages.reduce(
+    (n, m) => n + Math.ceil((m.content || "").length / 4),
+    0,
+  );
+  if (estTokens > modelCtx) {
+    return envelope(
+      "System: conversation too long for this model's context window. Please start a new chat.",
+    );
+  }
 
   // Resolve provider: explicit value in body wins; otherwise look up in the
   // built-in registry. If neither matches, refuse rather than guessing.

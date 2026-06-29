@@ -68,8 +68,10 @@ interface ModelOption {
   name: string;
   shortName: string;
   // Tells the backend which API to dispatch to. Required for every model,
-  // including user-added custom ones from the Add Model form (later chunk).
+  // including user-added custom ones from the Add Model form.
   provider: "venice" | "openrouter";
+  // Total context window in tokens; undefined -> DEFAULT_CONTEXT_WINDOW.
+  contextWindow?: number;
 }
 
 // =====================================================================
@@ -78,30 +80,23 @@ interface ModelOption {
 
 // Keep these in sync with BUILT_IN_MODELS in /api/chat.ts.
 const DEFAULT_MODEL_ID = "gemma-4-uncensored";
+// Fallback context window (tokens) for custom models that predate the
+// context-window field, or any model missing the value.
+const DEFAULT_CONTEXT_WINDOW = 32768;
 const availableModels: ModelOption[] = [
   {
     id: "gemma-4-uncensored",
     name: "Gemma 4 Uncensored (Venice)",
     shortName: "Gemma 4",
     provider: "venice",
-  },
-  {
-    id: "venice-uncensored-1-2",
-    name: "test model",
-    shortName: "test model",
-    provider: "venice",
-  },
-  {
-    id: "e2ee-qwen3-6-35b-a3b-uncensored-p",
-    name: "Qwen 3.6 35B A3B Uncensored (Venice)",
-    shortName: "Qwen 35B",
-    provider: "venice",
+    contextWindow: 262144, // 256K — Sam confirmed
   },
   {
     id: "e2ee-gemma-4-26b-a4b-uncensored-p",
     name: "Gemma 4 26B A4B Uncensored (Venice)",
     shortName: "Gemma 26B",
     provider: "venice",
+    contextWindow: 65536, // 64K — Sam confirmed
   },
 ];
 
@@ -120,15 +115,10 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
 ];
 
 
-// Cap how many prior turns we send upstream so token usage stays bounded on
-// long chats. The full history still renders + saves locally; only the model
-// payload is trimmed to the most recent MAX_HISTORY messages.
-//
-// Why 40: ~20 exchanges of context. Long enough for the model to follow
-// ongoing argument, short enough that a typical 8B-13B chat model stays
-// comfortably within its context window. The /api/chat route enforces a
-// slightly larger server-side cap (60) as a guardrail.
-const MAX_HISTORY = 40;
+// History sent upstream is now trimmed by a token budget per model's context
+// window (see estimateTokens / rollingHistoryBudget / trimToTokenBudget below).
+// The full history still renders + saves to the cloud; only the model payload
+// is trimmed.
 
 // Short, collision-resistant id. base36 of (epoch ms) + 4 random base36 chars.
 // Used for both chat session ids and message ids — same shape, same generator.
@@ -140,6 +130,49 @@ function generateId(): string {
     return crypto.randomUUID();
   }
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// --- Token-aware context window trimming ---
+// Replaces the old fixed MAX_HISTORY=40 cap. Estimate tokens (chars/4 — no
+// tokenizer dependency) and keep as many recent turns as fit the model window.
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function trimToTokenBudget(
+  messages: ChatMessage[],
+  budget: number,
+): ChatMessage[] {
+  if (budget <= 0) return [];
+  const result: ChatMessage[] = [];
+  let used = 0;
+  // Walk backward from the most recent — preserves the freshest context.
+  // +4 per message accounts for role/formatting overhead in the chat template.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const cost = estimateTokens(messages[i].text) + 4;
+    if (used + cost > budget) break;
+    result.unshift(messages[i]);
+    used += cost;
+  }
+  return result;
+}
+
+// Cushion of the window reserved for future image/video tokens — chars/4 can't
+// see media tokens. Blunt stopgap until real attachment-token accounting lands;
+// set to 0 to disable.
+const MEDIA_HEADROOM = 0.1;
+
+// Tokens available for prior conversation, given a model window + system prompt.
+function rollingHistoryBudget(
+  contextWindow: number,
+  systemPromptText: string | null,
+): number {
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return 0;
+  const targetInput = Math.floor(contextWindow * 0.8);
+  const outputReserve = contextWindow <= 32768 ? 2048 : 4096;
+  const mediaReserve = Math.floor(contextWindow * MEDIA_HEADROOM);
+  const systemTokens = systemPromptText ? estimateTokens(systemPromptText) : 0;
+  return Math.max(0, targetInput - outputReserve - mediaReserve - systemTokens);
 }
 
 // =====================================================================
@@ -599,6 +632,7 @@ export default function Page() {
   // still needed for the form controls.)
   const [newModelProvider, setNewModelProvider] = useState<"venice" | "openrouter">("venice");
   const [newModelId, setNewModelId] = useState("");
+  const [customContextWindow, setCustomContextWindow] = useState("");
   const [addModelFeedback, setAddModelFeedback] = useState<
     { kind: "ok" | "err"; text: string } | null
   >(null);
@@ -886,6 +920,13 @@ export default function Page() {
     if (allModels.some((m) => m.id === trimmed)) {
       return { ok: false, error: "That model is already in the list." };
     }
+    const ctxWindow = Number(customContextWindow);
+    if (!Number.isFinite(ctxWindow) || ctxWindow < 1000 || ctxWindow > 1000000) {
+      return {
+        ok: false,
+        error: "Context window must be a whole number between 1,000 and 1,000,000.",
+      };
+    }
     // Build a sensible short label automatically — take the segment after
     // the last "/" or "-", truncated.
     const tail = trimmed.split("/").pop() || trimmed;
@@ -895,6 +936,7 @@ export default function Page() {
       name: `${trimmed} (${newModelProvider === "venice" ? "Venice" : "OpenRouter"})`,
       shortName,
       provider: newModelProvider,
+      contextWindow: ctxWindow,
     };
     setCustomModels((prev) => [...prev, model]);
     return { ok: true };
@@ -922,9 +964,13 @@ export default function Page() {
       // Look up the model's provider in the merged list (built-in + custom).
       // Legacy chats with a modelId no longer in the list get provider=undefined
       // and the backend will return a friendly "unknown model" error.
-      const modelEntry = allModels.find(
-        (m) => m.id === activeSession.modelId,
-      );
+      // Resolve the model. If this chat is pinned to a model that's no longer
+      // offered (a removed built-in), fall back to the default so the send still
+      // works instead of erroring with "unknown model".
+      const modelEntry =
+        allModels.find((m) => m.id === activeSession.modelId) ??
+        allModels.find((m) => m.id === DEFAULT_MODEL_ID);
+      const effectiveModelId = modelEntry?.id ?? DEFAULT_MODEL_ID;
       const providerToSend = modelEntry?.provider;
 
       const messagesToSend: {
@@ -936,9 +982,11 @@ export default function Page() {
       }
       // Include prior conversation so the model has memory. activeSession here
       // is the pre-append snapshot (setChatSessions is async), so these are the
-      // turns BEFORE the current one — no duplicate of txt. Trim to the most
-      // recent MAX_HISTORY turns to keep token usage bounded.
-      const priorTurns = activeSession.messages.slice(-MAX_HISTORY);
+      // turns BEFORE the current one — no duplicate of txt. Token-aware trim:
+      // keep as many recent turns as fit this model's context window.
+      const contextWindow = modelEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+      const budget = rollingHistoryBudget(contextWindow, systemTextToUse);
+      const priorTurns = trimToTokenBudget(activeSession.messages, budget);
       for (const m of priorTurns) {
         messagesToSend.push({
           role: m.type === "ai" ? "assistant" : "user",
@@ -960,7 +1008,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: messagesToSend,
-          model: activeSession.modelId,
+          model: effectiveModelId,
           provider: providerToSend,
           // zo's public edge strips the Authorization header, so the Supabase
           // access token rides in the body instead (it passes through intact).
@@ -1463,6 +1511,7 @@ export default function Page() {
                         if (result.ok) {
                           setAddModelFeedback({ kind: "ok", text: `Added "${newModelId.trim()}".` });
                           setNewModelId("");
+                          setCustomContextWindow("");
                         } else {
                           setAddModelFeedback({ kind: "err", text: result.error });
                         }
@@ -1472,11 +1521,28 @@ export default function Page() {
                     spellCheck={false}
                   />
                 </div>
+                <div className="input-row">
+                  <label htmlFor="add-model-ctx-input">Context Window (tokens)</label>
+                  <input
+                    id="add-model-ctx-input"
+                    type="number"
+                    value={customContextWindow}
+                    onChange={(e) => setCustomContextWindow(e.target.value)}
+                    placeholder="e.g. 32768, 131072, 262144"
+                    min={1000}
+                    max={1000000}
+                    autoComplete="off"
+                  />
+                  <p style={{ fontSize: "10px", color: "rgba(245, 245, 220, 0.55)", marginTop: "4px", lineHeight: 1.3 }}>
+                    The model's total context window in tokens (check the provider's docs). Common: 8K=8000, 32K=32000, 128K=131000, 256K=262000.
+                  </p>
+                </div>
                 <div className="row">
                   <button
                     className="setting-btn"
                     onClick={() => {
                       setNewModelId("");
+                      setCustomContextWindow("");
                       setAddModelFeedback(null);
                     }}
                   >
@@ -1489,6 +1555,7 @@ export default function Page() {
                       if (result.ok) {
                         setAddModelFeedback({ kind: "ok", text: `Added "${newModelId.trim()}".` });
                         setNewModelId("");
+                        setCustomContextWindow("");
                       } else {
                         setAddModelFeedback({ kind: "err", text: result.error });
                       }
