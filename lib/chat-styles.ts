@@ -26,7 +26,7 @@ body {
 }
 
 .indicator {
-  position: fixed; bottom: 20px; right: 20px; color: rgba(255, 255, 255, 0.6);
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255, 255, 255, 0.6);
   font-size: 12px; font-family: Arial, sans-serif; z-index: 2; cursor: pointer;
   padding: 10px 15px; background: rgba(0, 0, 0, 0.3); border-radius: 4px;
 }
@@ -179,18 +179,17 @@ body {
 
 /* --- SETTINGS PANEL --- */
 .settings-panel {
-  position: fixed; top: 20px; left: 20px; z-index: 100; background: rgba(101, 67, 33, 0.85);
+  position: fixed; top: 14px; left: 32px; z-index: 100; background: rgba(101, 67, 33, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 8px 12px;
   box-shadow: 0 4px 8px rgba(0,0,0,0.4); pointer-events: auto; backdrop-filter: blur(5px);
 }
-.settings-header { text-align: center; font-family: 'Segoe UI', sans-serif; font-weight: 600; color: #f5f5dc; font-size: 13px; padding-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 8px;}
 /* Settings buttons flow horizontally — no wrap. Scroll horizontally if the
    panel gets wider than the screen. Edit button stays at the right end. */
 .settings-controls {
   display: flex; gap: 8px; align-items: center;
   flex-wrap: nowrap;
   overflow-x: auto;
-  max-width: calc(100vw - 60px);
+  max-width: calc(100vw - 76px);
   scrollbar-width: thin;
 }
 .settings-controls::-webkit-scrollbar { height: 4px; }
@@ -207,9 +206,9 @@ body {
 .input-centered .wood-chat-header { display: none; }
 .header-chat-name { font-size: 1.4em; font-weight: 700; color: #f5f5dc; font-family: 'Segoe UI', sans-serif; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
 .header-prompt-name { font-size: 0.9em; font-weight: 700; color: #d4a017; font-family: 'Segoe UI', sans-serif; font-style: italic; letter-spacing: 0.02em; text-shadow: 0 1px 3px rgba(0,0,0,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
-.save-pill { align-self: center; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-family: "Segoe UI", sans-serif; }
-.save-pill.saving { background: rgba(255,255,255,0.15); color: #f5f5dc; }
-.save-pill.saved { background: rgba(120,180,90,0.35); color: #eaffe0; }
+.save-pill { position: absolute; top: 2.5%; right: 3.5%; z-index: 30; pointer-events: auto; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-family: "Segoe UI", sans-serif; }
+.save-pill.saving { background: rgba(184,134,11,0.35); color: #f5f5dc; }
+.save-pill.saved { background: rgba(184,134,11,0.85); color: #fff8dc; }
 .save-pill.error { background: rgba(200,70,60,0.5); color: #ffd6d2; cursor: pointer; }
 .wood-chat-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 12px; pointer-events: auto; scrollbar-width: none; transition: opacity 0.5s ease; }
 .wood-chat-messages::-webkit-scrollbar { display: none; }

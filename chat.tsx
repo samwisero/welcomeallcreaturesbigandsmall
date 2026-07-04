@@ -354,7 +354,12 @@ export default function Page() {
         }));
         setChatSessions(upgraded);
         if (upgraded.length > 0) {
-          setActiveSessionId(upgraded[upgraded.length - 1].id);
+          // Most recently USED chat becomes active (the list is also sorted by
+          // this) — array position is meaningless since the desc-order load.
+          const mostRecent = [...upgraded].sort(
+            (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+          )[0];
+          setActiveSessionId(mostRecent.id);
         }
       } catch (err) {
         console.error("Cloud chat load failed", err);
@@ -481,7 +486,11 @@ export default function Page() {
     setChatSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== id);
       if (id === activeSessionId) {
-        setActiveSessionId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+        setActiveSessionId(
+          remaining.length > 0
+            ? [...remaining].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0].id
+            : null,
+        );
       }
       return remaining;
     });
@@ -952,7 +961,6 @@ export default function Page() {
       <div className="content-container">
         <div className="centered-box">
           <div className="settings-panel">
-            <div className="settings-header">Settings</div>
             <div className="settings-controls">
               <button className="setting-btn" onClick={cycleFontSize}>
                 Aa: {fontSize}
@@ -986,6 +994,19 @@ export default function Page() {
 
           </div>
 
+          {saveStatus !== "idle" && (
+            <div
+              className={`save-pill ${saveStatus}`}
+              onClick={saveStatus === "error" ? retrySaveNow : undefined}
+              title={saveStatus === "error" ? "Click to retry" : undefined}
+            >
+              {saveStatus === "saving"
+                ? "Saving…"
+                : saveStatus === "saved"
+                  ? "Saved"
+                  : "Save failed — retry"}
+            </div>
+          )}
           <div className={overlayClass}>
             <div className="wood-chat-header">
               <div className="header-chat-name">
@@ -996,19 +1017,6 @@ export default function Page() {
                   ? `Prompt: ${systemPrompts.find((p) => p.id === activeSession.systemPromptId)?.name ?? "(deleted)"}`
                   : "No System Prompt Selected"}
               </div>
-              {saveStatus !== "idle" && (
-                <div
-                  className={`save-pill ${saveStatus}`}
-                  onClick={saveStatus === "error" ? retrySaveNow : undefined}
-                  title={saveStatus === "error" ? "Click to retry" : undefined}
-                >
-                  {saveStatus === "saving"
-                    ? "Saving…"
-                    : saveStatus === "saved"
-                      ? "Saved"
-                      : "Save failed — retry"}
-                </div>
-              )}
             </div>
 
             <div className="wood-chat-messages" ref={messagesRef}>
