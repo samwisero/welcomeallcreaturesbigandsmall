@@ -2,6 +2,15 @@
 import type { Context } from "hono";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, getUser } from "../lib/api-auth";
 
+// ANCHOR IMPORT — do not remove. The build's dependency scanner only discovers
+// npm packages imported from recognized route files (pages/, api/), NOT from
+// lib/ modules. @supabase/supabase-js is otherwise only imported inside
+// ../lib/supabase-client.ts, so without this line a genuine fresh
+// (clear-cache) build fails with "Rollup failed to resolve import".
+// Fix applied + verified 2026-07-05; see 2ndbrain 01-projects/all-creatures-chat-site.md.
+import { createClient as _supabaseAnchor } from "@supabase/supabase-js";
+void _supabaseAnchor; // referenced so lint/tree-shaking never strips the import
+
 // Same Supabase project constants as api-chat.ts / api-transcripts.ts.
 export default async function handler(c: Context): Promise<Response> {
   let body: { action?: string; accessToken?: string; prefs?: Record<string, unknown> } = {};
