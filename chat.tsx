@@ -663,6 +663,9 @@ export default function Page() {
           // zo's public edge strips the Authorization header, so the Supabase
           // access token rides in the body instead (it passes through intact).
           accessToken,
+          // Which chat this is — lets the server wake a declared being's
+          // memory limbs (recall / recall_full_account). Harmless otherwise.
+          threadId: sid,
         }),
       });
       const data = (await res.json()) as {

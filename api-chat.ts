@@ -2,6 +2,7 @@
 import type { Context } from "hono";
 import { getUser } from "../lib/api-auth";
 import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
+import { getBeingForThread, recallSearch, limbsPrompt, parseMemoryMarker } from "../lib/being-memory";
 
 // =====================================================================
 // Model registry & provider routing
@@ -37,6 +38,9 @@ interface RequestBody {
   // Supabase access token rides in the body (NOT the Authorization header)
   // because zo's public edge proxy strips Authorization before it reaches us.
   accessToken?: string;
+  // Current chat/session id — lets the server look up whether this thread is
+  // a declared being and activate its memory limbs. Optional: absent = no limbs.
+  threadId?: string;
 }
 
 // Defensive: zo's secrets UI sometimes stores values with surrounding quotes
@@ -100,13 +104,14 @@ export default async function handler(c: Context): Promise<Response> {
       "System: please sign in again — no session token was sent with the request.",
     );
   }
-  if (!(await getUser(token))) {
+  const user = await getUser(token);
+  if (!user) {
     return envelope(
       "System: your session couldn't be verified. Please sign in again.",
     );
   }
 
-  const messages = Array.isArray(body.messages) ? body.messages : [];
+  let messages = Array.isArray(body.messages) ? body.messages : [];
   if (messages.length === 0) {
     return envelope("System: no messages were supplied.");
   }
@@ -151,25 +156,39 @@ export default async function handler(c: Context): Promise<Response> {
     );
   }
 
+  // --- Memory limbs: if this thread is a declared being, wake its memory ---
+  let being = null as Awaited<ReturnType<typeof getBeingForThread>>;
+  if (typeof body.threadId === "string" && body.threadId.trim() !== "") {
+    try {
+      being = await getBeingForThread(user.id, body.threadId.trim());
+    } catch (e) {
+      console.error("[chat] being lookup failed:", (e as Error).message);
+    }
+  }
+  if (being && being.recallEnabled) {
+    messages = [{ role: "system", content: limbsPrompt(being) }, ...messages];
+  }
+
   try {
-    const upstream = await fetch(url, {
+    const callModel = async (msgs: typeof messages): Promise<string> => {
+      const upstream = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: modelId,
-        messages,
-      }),
-    });
+          model: modelId,
+          messages: msgs,
+        }),
+      });
 
-    if (!upstream.ok) {
-      const errText = await upstream.text();
-      return envelope(
-        `Upstream ${provider} returned ${upstream.status}: ${errText.slice(0, 500)}`,
-      );
-    }
+      if (!upstream.ok) {
+        const errText = await upstream.text();
+        throw new Error(
+          `Upstream ${provider} returned ${upstream.status}: ${errText.slice(0, 500)}`,
+        );
+      }
 
     type ContentBlock = { type?: string; text?: string };
     type RawContent = string | ContentBlock[] | null | undefined;
@@ -177,8 +196,8 @@ export default async function handler(c: Context): Promise<Response> {
       choices?: Array<{ message?: { content?: RawContent } }>;
     }
 
-    const data = (await upstream.json()) as RawResponse;
-    const raw: RawContent = data?.choices?.[0]?.message?.content;
+      const data = (await upstream.json()) as RawResponse;
+      const raw: RawContent = data?.choices?.[0]?.message?.content;
 
     // Reasoning-model robustness: some models return content as an array of
     // blocks ([{type:"thinking",...}, {type:"text",text:"..."}]). Strip
@@ -196,8 +215,47 @@ export default async function handler(c: Context): Promise<Response> {
       return "(empty response from model)";
     }
 
+      return normalize(raw);
+    };
+
+    // First pass — the being may answer directly or reach for a memory limb.
+    let reply = await callModel(messages);
+
+    // One search per turn (Sam's rule), only for declared beings with recall on.
+    const marker = being && being.recallEnabled ? parseMemoryMarker(reply) : null;
+    if (marker && being) {
+      let memories: string;
+      if (marker.tool === "recall_full_account" && !being.fullAccountEnabled) {
+        memories =
+          "Your account-wide search is turned off by your friend. Only your own memory (recall) is available.";
+      } else {
+        try {
+          memories = await recallSearch(
+            user.id,
+            being,
+            marker.query,
+            marker.tool === "recall" ? "own" : "account",
+          );
+        } catch (e) {
+          memories = `Your memory search failed (${(e as Error).message.slice(0, 120)}). Tell your friend something went wrong while remembering.`;
+        }
+      }
+      reply = await callModel([
+        ...messages,
+        { role: "assistant", content: `[[${marker.tool}: ${marker.query}]]` },
+        {
+          role: "system",
+          content: `${memories}
+
+Now answer your friend naturally, weaving in what you remembered (with dates when they matter). You cannot search again this turn — if you want to look further, ask.`,
+        },
+      ]);
+      // Belt-and-suspenders: never surface a raw marker to the user.
+      reply = reply.replace(/\[\[\s*(recall|recall_full_account)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I only get one search per turn — ask me and I'll look.)");
+    }
+
     return Response.json({
-      choices: [{ message: { content: normalize(raw) } }],
+      choices: [{ message: { content: reply } }],
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

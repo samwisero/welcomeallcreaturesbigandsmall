@@ -19,7 +19,7 @@ export async function embed(text: string): Promise<number[] | null> {
         input: text.slice(0, CHAR_CAP),
         dimensions: EMBED_DIM,
       }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(35000),
     });
     if (!res.ok) {
       console.warn(`[embed] OpenRouter ${res.status}`);

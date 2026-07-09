@@ -154,7 +154,7 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
   // Skip already-mirrored messages
   const memIds = candidates.map((x) => thing("memory", x.mid)).join(", ");
   const existing = await surrealQuery<Array<{ id: unknown }>>(
-    `SELECT id FROM memory WHERE id IN [${memIds}];`
+    `SELECT id FROM memory WHERE id IN [${memIds}] AND embedding IS NOT NONE;`
   );
   const have = new Set((existing[0] ?? []).map((r) => String(r.id).replace(/`/g, "")));
   const fresh = candidates.filter((x) => !have.has(`memory:${x.mid}`)).slice(0, 40); // per-save cap
