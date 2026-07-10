@@ -5,7 +5,7 @@ import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
 import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker } from "../lib/being-memory";
 
 // =====================================================================
-// Model registry & provider routing
+// Model registry & provider routing (rebuild bump 07/10 v1.3)
 // =====================================================================
 //
 // Built-in models live in BUILT_IN_MODELS — used as the source of truth when

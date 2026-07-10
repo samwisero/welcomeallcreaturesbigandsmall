@@ -166,7 +166,10 @@ export async function recallSearch(
     if (h.kind === "chat_name") speaker = "chat name";
     else if (h.kind === "system_prompt") speaker = "system prompt";
     else speaker = h.role === "being" ? (tc?.beingName ?? "the AI") : "the friend";
-    return `${i + 1}. [${when || "date unknown"}] in "${chatName}" (${owner}) — ${speaker}: ${h.content.slice(0, 700)} [thread: ${bare(tKey)}]`;
+    const body = h.kind === "chat_message"
+      ? `${speaker} said: "${h.content.slice(0, 700)}"`
+      : `${speaker}: ${h.content.slice(0, 700)}`;
+    return `${i + 1}. on ${when || "an unknown date"} in the thread "${chatName}" ${bare(tKey)} (${owner}) — ${body}`;
   });
   return `Memories found (${top.length}) — real quotes from the past:
 ${lines.join("\n")}
@@ -175,7 +178,7 @@ You may take ONE more memory action right now: reply with ONLY [[read_thread: <t
 }
 
 const READ_CHAR_BUDGET = 14000;
-const READ_MSG_CAP = 120;
+const READ_MSG_CAP = 20; // Sam 07/10: 20 default; per-chat configurable is queued work
 
 /**
  * The zoom limb: open one conversation and return a large (capped) portion,

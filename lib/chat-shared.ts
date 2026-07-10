@@ -40,11 +40,18 @@ export interface ModelOption {
 
 // THE one model catalog — imported by the /chat page AND /api/chat, so the
 // client picker and the server registry can no longer drift apart.
-export const DEFAULT_MODEL_ID = "gemma-4-uncensored";
+export const DEFAULT_MODEL_ID = "olafangensan-glm-4.7-flash-heretic:disable_thinking=true";
 // Fallback context window (tokens) for custom models that predate the
 // context-window field, or any model missing the value.
 export const DEFAULT_CONTEXT_WINDOW = 32768;
 export const availableModels: ModelOption[] = [
+  {
+    id: "olafangensan-glm-4.7-flash-heretic:disable_thinking=true",
+    name: "GLM 4.7 Flash Heretic (Venice)",
+    shortName: "GLM Heretic",
+    provider: "venice",
+    contextWindow: 200000, // Sam confirmed — new account default 07/10/26
+  },
   {
     id: "gemma-4-uncensored",
     name: "Gemma 4 Uncensored (Venice)",

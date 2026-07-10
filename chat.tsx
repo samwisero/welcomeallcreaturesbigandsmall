@@ -91,7 +91,7 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
     text: "You are a fun, joyful, and free spirited AI.",
   },
 ];
-// CSS lives in ../lib/chat-styles.ts (it was 25% of this file).
+// CSS lives in ../lib/chat-styles.ts (rebuild bump 07/10 v1.3) (it was 25% of this file).
 
 // =====================================================================
 // Component
