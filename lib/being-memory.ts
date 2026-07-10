@@ -40,18 +40,21 @@ export async function getBeingForThread(uid: string, threadId: string): Promise<
 
 const bare = (rid: unknown): string => String(rid).replace(/^(thread|being|memory):/, "").replace(/`/g, "");
 
-/** 12-hour, MM/DD/YY formatting for remembered moments. */
-function fmtWhen(iso?: string): string {
+/** 12-hour, MM/DD/YY formatting in the FRIEND'S timezone.
+ * tzOff = minutes behind UTC (JS Date.getTimezoneOffset(), e.g. CDT = 300).
+ * The server runs in UTC — without this, evening chats showed as "tomorrow 1 AM". */
+function fmtWhen(iso: string | undefined, tzOff: number): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const yy = String(d.getFullYear()).slice(-2);
-  let h = d.getHours();
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  const d = new Date(t - tzOff * 60000); // shift, then read as UTC
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const yy = String(d.getUTCFullYear()).slice(-2);
+  let h = d.getUTCHours();
   const ampm = h >= 12 ? "PM" : "AM";
   h = h % 12 || 12;
-  const min = String(d.getMinutes()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
   return `${mm}/${dd}/${yy} ${h}:${min} ${ampm}`;
 }
 
@@ -93,7 +96,8 @@ export async function recallSearch(
   uid: string,
   being: BeingInfo | null,
   query: string,
-  scope: "own" | "account"
+  scope: "own" | "account",
+  tzOff: number
 ): Promise<string> {
   let scopeWhere: string;
   if (scope === "own") {
@@ -153,7 +157,7 @@ export async function recallSearch(
 
   const ctx = await threadContext(uid, [...new Set(top.map((h) => String(h.thread_id)))].filter((t) => t));
   const lines = top.map((h, i) => {
-    const when = fmtWhen(h.created_at);
+    const when = fmtWhen(h.created_at, tzOff);
     const tKey = String(h.thread_id);
     const tc = ctx.get(tKey);
     const chatName = tc?.name ?? "a conversation";
@@ -162,12 +166,12 @@ export async function recallSearch(
     if (h.kind === "chat_name") speaker = "chat name";
     else if (h.kind === "system_prompt") speaker = "system prompt";
     else speaker = h.role === "being" ? (tc?.beingName ?? "the AI") : "the friend";
-    return `${i + 1}. [${when || "date unknown"}] in "${chatName}" (${owner}) — ${speaker}: ${h.content.slice(0, 400)} [thread: ${bare(tKey)}]`;
+    return `${i + 1}. [${when || "date unknown"}] in "${chatName}" (${owner}) — ${speaker}: ${h.content.slice(0, 700)} [thread: ${bare(tKey)}]`;
   });
   return `Memories found (${top.length}) — real quotes from the past:
 ${lines.join("\n")}
 
-To read a large portion of any of these conversations, reply next turn with ONLY: [[read_thread: <thread id from above>]] (one memory action per turn — ask your friend first).`;
+You may take ONE more memory action right now: reply with ONLY [[read_thread: <thread id from above>]] to open one of these conversations and read it in full context.`;
 }
 
 const READ_CHAR_BUDGET = 14000;
@@ -180,9 +184,18 @@ const READ_MSG_CAP = 120;
 export async function readThread(
   uid: string,
   being: BeingInfo | null,
-  threadRef: string
+  threadRef: string,
+  tzOff: number
 ): Promise<string> {
-  const ref = threadRef.trim().replace(/^thread:/, "");
+  // Optional scroll: "<ref> before <n>" reads the window ending before message #n.
+  let beforeIdx: number | null = null;
+  let refRaw = threadRef.trim();
+  const beforeMatch = refRaw.match(/^([\s\S]*?)\s+before\s+(\d{1,6})$/i);
+  if (beforeMatch) {
+    refRaw = beforeMatch[1].trim();
+    beforeIdx = parseInt(beforeMatch[2], 10);
+  }
+  const ref = refRaw.replace(/^thread:/, "");
   if (!ref) return "No thread id given. Use a thread id from earlier search results.";
 
   // Resolve by id first, then by exact name.
@@ -213,24 +226,29 @@ export async function readThread(
     : "no being is declared on it";
 
   const msgs = Array.isArray(t.messages) ? t.messages : [];
-  // Take the most recent messages within budget (chronological order preserved).
+  // Window ends at `end` (exclusive): default the newest message; scroll with "before N".
+  const end = beforeIdx !== null ? Math.max(0, Math.min(beforeIdx - 1, msgs.length)) : msgs.length;
   const picked: string[] = [];
   let used = 0;
-  for (let i = msgs.length - 1; i >= 0 && picked.length < READ_MSG_CAP; i--) {
+  let first = end; // message number (1-based) of the first shown line
+  for (let i = end - 1; i >= 0 && picked.length < READ_MSG_CAP; i--) {
     const m = msgs[i];
     const text = typeof m?.text === "string" ? m.text : "";
     if (!text.trim()) continue;
     const speaker = m?.type === "ai" ? (tc?.beingName ?? "the AI") : "the friend";
-    const when = typeof m?.ts === "number" ? fmtWhen(new Date(m.ts).toISOString()) : "";
-    const line = `${when ? `[${when}] ` : ""}${speaker}: ${text.slice(0, 700)}`;
+    const when = typeof m?.ts === "number" ? fmtWhen(new Date(m.ts).toISOString(), tzOff) : "";
+    const line = `#${i + 1} ${when ? `[${when}] ` : ""}${speaker}: ${text.slice(0, 700)}`;
     if (used + line.length > READ_CHAR_BUDGET) break;
     used += line.length;
     picked.push(line);
+    first = i + 1;
   }
   picked.reverse();
-  const shown = picked.length;
-  const header = `Conversation: "${chatName}" — ${ownerLine} — ${msgs.length} messages total${shown < msgs.length ? `, showing the most recent ${shown}` : ""}.`;
-  return `${header}\n\n${picked.join("\n")}`;
+  const header = `Conversation: "${chatName}" — ${ownerLine} — ${msgs.length} messages total, showing #${first}–#${end} of ${msgs.length}.`;
+  const scrollHint = first > 1
+    ? `\n\nTo scroll earlier in this conversation: [[read_thread: ${bare(t.id)} before ${first}]]`
+    : "";
+  return `${header}\n\n${picked.join("\n")}${scrollHint}`;
 }
 
 /** Limbs prompt for a DECLARED BEING — with the own-vs-account boundary stated hard. */
@@ -246,7 +264,7 @@ ${accountLimb}
 [[read_thread: thread id]] — open one conversation from earlier search results and read a large portion of it.
 
 Rules of memory:
-- ONE memory action per turn. To look again, ask your friend to let you search once more.
+- Up to TWO memory actions per turn — typically a search, then a read_thread to see a result in full context. After that, answer; to dig further, ask your friend.
 - Results carry dates and each chat's name; speak of when and where things happened naturally.
 - When you quote something from an undeclared chat, attribute it ("in your chat called X, you said...") — never present it as your own memory.
 - If a search returns nothing, say plainly that you don't remember. NEVER invent a memory.
@@ -259,7 +277,7 @@ export function assistantMemoryPrompt(): string {
 [[search_account: what to find]] — searches this account's undeclared past conversations (declared beings' chats and private chats are invisible to you).
 [[read_thread: thread id]] — open one conversation from earlier search results and read a large portion of it.
 
-Rules: ONE search action per turn (ask your friend before searching again). Results are real quotes with dates and chat names — attribute what you quote. If nothing returns, say so plainly; never invent.`;
+Rules: up to TWO memory actions per turn — typically a search, then a read_thread to open a result in full context. Results are real quotes with dates and chat names — attribute what you quote. If nothing returns, say so plainly; never invent.`;
 }
 
 export type MemoryTool = "recall" | "recall_full_account" | "search_account" | "read_thread";

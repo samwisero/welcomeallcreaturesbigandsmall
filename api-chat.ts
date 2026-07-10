@@ -225,10 +225,18 @@ export default async function handler(c: Context): Promise<Response> {
     // First pass — the being may answer directly or reach for a memory limb.
     let reply = await callModel(messages);
 
-    // One search per turn (Sam's rule), only for declared beings with recall on.
+    // Up to TWO chained memory actions per turn (search -> read_thread is the
+    // canonical chain). Chaining matters: memory results (with thread ids) are
+    // ephemeral — the model can only zoom while they're still in hand.
     const memoryActive = being ? being.recallEnabled : hasThread;
-    const marker = memoryActive ? parseMemoryMarker(reply) : null;
-    if (marker) {
+    const tzOff =
+      typeof body.tzOffsetMinutes === "number" && isFinite(body.tzOffsetMinutes)
+        ? Math.max(-840, Math.min(840, body.tzOffsetMinutes))
+        : 0;
+    let convo = messages;
+    for (let action = 1; action <= 2; action++) {
+      const marker = memoryActive ? parseMemoryMarker(reply) : null;
+      if (!marker) break;
       let memories: string;
       const accountBlocked =
         being !== null &&
@@ -240,32 +248,38 @@ export default async function handler(c: Context): Promise<Response> {
       } else {
         try {
           if (marker.tool === "read_thread") {
-            memories = await readThread(user.id, being, marker.query);
+            memories = await readThread(user.id, being, marker.query, tzOff);
           } else {
             memories = await recallSearch(
               user.id,
               being,
               marker.query,
               marker.tool === "recall" ? "own" : "account",
+              tzOff,
             );
           }
         } catch (e) {
           memories = `Your memory search failed (${(e as Error).message.slice(0, 120)}). Tell your friend something went wrong while remembering.`;
         }
       }
-      reply = await callModel([
-        ...messages,
+      const followup =
+        action < 2
+          ? "You may take ONE more memory action right now (e.g. [[read_thread: <thread id>]] to read a conversation in full, or [[read_thread: <id> before <n>]] to scroll earlier) — or answer your friend now, weaving in what you found (with dates when they matter)."
+          : "That was your last memory action this turn. Answer your friend now, weaving in what you found (with dates when they matter). To dig further, ask.";
+      convo = [
+        ...convo,
         { role: "assistant", content: `[[${marker.tool}: ${marker.query}]]` },
         {
           role: "system",
           content: `${memories}
 
-Now answer your friend naturally, weaving in what you remembered (with dates when they matter). You cannot search again this turn — if you want to look further, ask.`,
+${followup}`,
         },
-      ]);
-      // Belt-and-suspenders: never surface a raw marker to the user.
-      reply = reply.replace(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I only get one memory action per turn — ask me and I'll look.)");
+      ];
+      reply = await callModel(convo);
     }
+    // Belt-and-suspenders: never surface a raw marker to the user.
+    reply = reply.replace(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I'm out of memory actions this turn — ask me and I'll look.)");
 
     return Response.json({
       choices: [{ message: { content: reply } }],

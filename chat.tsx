@@ -782,6 +782,8 @@ export default function Page() {
           // Which chat this is — lets the server wake a declared being's
           // memory limbs (recall / recall_full_account). Harmless otherwise.
           threadId: sid,
+          // Friend's timezone, so remembered dates read in their clock.
+          tzOffsetMinutes: new Date().getTimezoneOffset(),
         }),
       });
       const data = (await res.json()) as {
