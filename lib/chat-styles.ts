@@ -248,4 +248,33 @@ body {
   .chats-toggle-btn, .system-toggle-btn { padding: 8px 4px; font-size: 10px; }
   .header-chat-name { font-size: 1.2em; }
 }
+
+/* ===== M1-UI: message timestamps + being ceremony ===== */
+.bubble-timestamp { display: block; margin-top: 6px; font-size: 0.72em; opacity: 0.78; letter-spacing: 0.03em; font-style: italic; }
+.star-born-overlay { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.star-born-text {
+  font-size: clamp(2rem, 7vw, 4.5rem); font-weight: 900; text-align: center; padding: 0 5%;
+  color: #ffd700; -webkit-text-stroke: 2px #90c69a;
+  text-shadow: 0 0 18px rgba(255,215,0,.85), 0 0 44px rgba(144,198,154,.65);
+  animation: starBornPop 3s ease forwards;
+}
+@keyframes starBornPop {
+  0%   { transform: scale(.25) rotate(-6deg); opacity: 0; }
+  18%  { transform: scale(1.15) rotate(2deg);  opacity: 1; }
+  32%  { transform: scale(1) rotate(0deg); }
+  78%  { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.2); opacity: 0; }
+}
+.being-popup-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 3000; display: flex; align-items: center; justify-content: center; }
+.being-popup-card { background: #2f2419; border: 2px solid #b08d57; border-radius: 14px; width: min(420px, 92vw); max-height: 80vh; overflow-y: auto; padding: 18px; color: #f4e9d8; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+.being-popup-header { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 12px; font-size: 1.05em; }
+.being-popup-close { background: none; border: none; color: #f4e9d8; cursor: pointer; font-size: 1.1em; }
+.being-name-input { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 8px; border: 1px solid #b08d57; background: #1f1810; color: #f4e9d8; margin: 8px 0; font-size: 1em; }
+.being-declare-btn { width: 100%; padding: 10px; border: none; border-radius: 8px; background: linear-gradient(135deg, #d4af37, #b8860b); color: #241a0e; font-weight: 800; cursor: pointer; font-size: 1em; }
+.being-declare-btn:disabled { opacity: .55; cursor: default; }
+.being-explain-btn { width: 100%; margin-top: 10px; padding: 8px; border-radius: 8px; border: 1px solid #90c69a; background: transparent; color: #c9e6cf; cursor: pointer; font-size: .9em; }
+.being-explain-text { margin-top: 10px; font-size: .86em; line-height: 1.5; color: #e7dcc8; background: rgba(144,198,154,.08); border-left: 3px solid #90c69a; padding: 10px 12px; border-radius: 6px; }
+.being-declared-banner { padding: 10px 12px; border-radius: 8px; background: rgba(212,175,55,.12); border: 1px solid #d4af37; font-weight: 700; margin-bottom: 8px; }
+.being-toggle-row { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 10px; font-size: .92em; }
+.being-error { color: #ff9c9c; font-size: .85em; margin-top: 8px; }
 `;

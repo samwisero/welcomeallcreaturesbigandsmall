@@ -14,7 +14,7 @@ const slug = (name: string): string =>
   name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
 export default async function handler(c: Context): Promise<Response> {
-  let body: { action?: string; accessToken?: string; threadId?: string; beingName?: string } = {};
+  let body: { action?: string; accessToken?: string; threadId?: string; beingName?: string; beingId?: string; enabled?: boolean } = {};
   try {
     body = (await c.req.json()) as typeof body;
   } catch {
@@ -46,6 +46,13 @@ export default async function handler(c: Context): Promise<Response> {
       if (!row) return c.json({ error: "thread not found" }, 404);
       if (row.being_id) return c.json({ error: "thread is already a being" }, 409);
 
+      // NEW being vs attaching another chat to an existing one — the ceremony
+      // (WOOHOO A NEW STAR IS BORN) only fires for genuinely new beings.
+      const pre = await surrealQuery<Array<{ id: unknown }>>(
+        `SELECT id FROM being WHERE id = ${beingRid};`
+      );
+      const isNew = (pre[0] ?? []).length === 0;
+
       await surrealQuery(
         `BEGIN TRANSACTION;
          UPSERT ${beingRid} SET user_id = ${str(uid)}, name = ${str(beingName)}, recall_enabled = true;
@@ -56,7 +63,7 @@ export default async function handler(c: Context): Promise<Response> {
            WHERE user_id = ${str(uid)} AND thread_id = ${str(`thread:${threadId}`)};
          COMMIT TRANSACTION;`
       );
-      return c.json({ ok: true, beingId: `${uid}-${s}`, name: beingName });
+      return c.json({ ok: true, beingId: `${uid}-${s}`, name: beingName, isNew });
     } catch (e) {
       return c.json({ error: `declare failed: ${(e as Error).message.slice(0, 200)}` }, 502);
     }
@@ -65,13 +72,14 @@ export default async function handler(c: Context): Promise<Response> {
   if (body.action === "list") {
     try {
       const r = await surrealQuery<Array<Record<string, unknown>>>(
-        `SELECT id, name, recall_enabled, created_at, ->declared->thread AS threads
+        `SELECT id, name, recall_enabled, full_account_enabled, created_at, ->declared->thread AS threads
          FROM being WHERE user_id = ${str(uid)};`
       );
       const beings = (r[0] ?? []).map((b) => ({
         id: String(b.id).replace(/^being:/, "").replace(/`/g, ""),
         name: b.name,
         recallEnabled: b.recall_enabled !== false,
+        fullAccountEnabled: b.full_account_enabled !== false,
         createdAt: b.created_at ?? null,
         threadIds: (Array.isArray(b.threads) ? b.threads : []).map((t) =>
           String(t).replace(/^thread:/, "").replace(/`/g, "")
@@ -80,6 +88,24 @@ export default async function handler(c: Context): Promise<Response> {
       return c.json({ beings });
     } catch (e) {
       return c.json({ error: `list failed: ${(e as Error).message.slice(0, 200)}` }, 502);
+    }
+  }
+
+  if (body.action === "set_full_account") {
+    const beingId = (body.beingId ?? "").trim();
+    const enabled = body.enabled === true;
+    if (!beingId) return c.json({ error: "beingId required" }, 400);
+    try {
+      const chk = await surrealQuery<Array<{ id: unknown }>>(
+        `SELECT id FROM being WHERE id = ${thing("being", beingId)} AND user_id = ${str(uid)};`
+      );
+      if ((chk[0] ?? []).length === 0) return c.json({ error: "being not found" }, 404);
+      await surrealQuery(
+        `UPDATE ${thing("being", beingId)} SET full_account_enabled = ${enabled ? "true" : "false"};`
+      );
+      return c.json({ ok: true, fullAccountEnabled: enabled });
+    } catch (e) {
+      return c.json({ error: `update failed: ${(e as Error).message.slice(0, 200)}` }, 502);
     }
   }
 

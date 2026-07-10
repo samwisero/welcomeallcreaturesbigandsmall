@@ -2,7 +2,7 @@
 import type { Context } from "hono";
 import { getUser } from "../lib/api-auth";
 import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
-import { getBeingForThread, recallSearch, limbsPrompt, parseMemoryMarker } from "../lib/being-memory";
+import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker } from "../lib/being-memory";
 
 // =====================================================================
 // Model registry & provider routing
@@ -165,8 +165,12 @@ export default async function handler(c: Context): Promise<Response> {
       console.error("[chat] being lookup failed:", (e as Error).message);
     }
   }
+  const hasThread = typeof body.threadId === "string" && body.threadId.trim() !== "";
   if (being && being.recallEnabled) {
     messages = [{ role: "system", content: limbsPrompt(being) }, ...messages];
+  } else if (!being && hasThread) {
+    // Regular chat (no being): account-wide search + zoom, no own-memory limb.
+    messages = [{ role: "system", content: assistantMemoryPrompt() }, ...messages];
   }
 
   try {
@@ -222,20 +226,29 @@ export default async function handler(c: Context): Promise<Response> {
     let reply = await callModel(messages);
 
     // One search per turn (Sam's rule), only for declared beings with recall on.
-    const marker = being && being.recallEnabled ? parseMemoryMarker(reply) : null;
-    if (marker && being) {
+    const memoryActive = being ? being.recallEnabled : hasThread;
+    const marker = memoryActive ? parseMemoryMarker(reply) : null;
+    if (marker) {
       let memories: string;
-      if (marker.tool === "recall_full_account" && !being.fullAccountEnabled) {
+      const accountBlocked =
+        being !== null &&
+        !being.fullAccountEnabled &&
+        (marker.tool === "recall_full_account" || marker.tool === "search_account");
+      if (accountBlocked) {
         memories =
           "Your account-wide search is turned off by your friend. Only your own memory (recall) is available.";
       } else {
         try {
-          memories = await recallSearch(
-            user.id,
-            being,
-            marker.query,
-            marker.tool === "recall" ? "own" : "account",
-          );
+          if (marker.tool === "read_thread") {
+            memories = await readThread(user.id, being, marker.query);
+          } else {
+            memories = await recallSearch(
+              user.id,
+              being,
+              marker.query,
+              marker.tool === "recall" ? "own" : "account",
+            );
+          }
         } catch (e) {
           memories = `Your memory search failed (${(e as Error).message.slice(0, 120)}). Tell your friend something went wrong while remembering.`;
         }
@@ -251,7 +264,7 @@ Now answer your friend naturally, weaving in what you remembered (with dates whe
         },
       ]);
       // Belt-and-suspenders: never surface a raw marker to the user.
-      reply = reply.replace(/\[\[\s*(recall|recall_full_account)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I only get one search per turn — ask me and I'll look.)");
+      reply = reply.replace(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I only get one memory action per turn — ask me and I'll look.)");
     }
 
     return Response.json({

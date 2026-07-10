@@ -5,6 +5,7 @@ export interface ChatMessage {
   id: string;
   text: string;
   type: "user" | "ai";
+  ts?: number; // ms epoch, stamped at creation (M1); absent on pre-M1 messages
 }
 
 export interface ChatSession {

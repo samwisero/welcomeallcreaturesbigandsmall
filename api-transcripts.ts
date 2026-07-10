@@ -102,7 +102,9 @@ export default async function handler(c: Context): Promise<Response> {
       const keepThings = sessions.map((s) => thing("thread", s.id)).join(", ");
       const keepStrs = sessions.map((s) => str(`thread:${s.id}`)).join(", ");
       sql += `DELETE thread WHERE user_id = ${str(uid)} AND id NOT IN [${keepThings}];\n`;
-      sql += `DELETE memory WHERE user_id = ${str(uid)} AND thread_id NOT IN [${keepStrs}];\n`;
+      // kind != system_prompt: prompt memories have no thread and must survive
+      // the reconcile (they were being purged on every save — bug fixed 07/09).
+      sql += `DELETE memory WHERE user_id = ${str(uid)} AND kind != "system_prompt" AND thread_id NOT IN [${keepStrs}];\n`;
       sql += "COMMIT TRANSACTION;";
       await surrealQuery(sql);
 
@@ -121,7 +123,7 @@ export default async function handler(c: Context): Promise<Response> {
   return c.json({ error: "unknown action" }, 400);
 }
 
-interface MsgShape { id?: unknown; text?: unknown; type?: unknown; }
+interface MsgShape { id?: unknown; text?: unknown; type?: unknown; ts?: unknown; }
 
 /** Mirror + embed messages not yet in memory. Respects privacy + memory_mode. */
 async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<void> {
@@ -136,7 +138,7 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
       .map((t) => bareId(t.id))
   );
 
-  const candidates: Array<{ mid: string; text: string; role: string; threadId: string }> = [];
+  const candidates: Array<{ mid: string; text: string; role: string; threadId: string; ts: number | null }> = [];
   for (const s of sessions) {
     if (!eligible.has(s.id)) continue;
     for (const m of (s.messages ?? []) as MsgShape[]) {
@@ -146,6 +148,7 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
         text: m.text,
         role: m.type === "ai" ? "being" : "user",
         threadId: s.id,
+        ts: typeof m.ts === "number" && isFinite(m.ts) && m.ts > 0 ? m.ts : null,
       });
     }
   }
@@ -172,6 +175,7 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
       role = ${str(x.role)},
       kind = "chat_message",
       content = ${str(x.text)},
+      created_at = ${x.ts ? `d${str(new Date(x.ts).toISOString())}` : "time::now()"},
       embedding = ${v ? JSON.stringify(v) : "NONE"};\n`;
   }
   if (sql) await surrealQuery(sql);

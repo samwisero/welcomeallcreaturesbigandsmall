@@ -1,13 +1,13 @@
-// lib/being-memory.ts — the being's two memory limbs (simple chat phase).
-// recall             -> the being's OWN memory (threads declared as it)
-// recall_full_account -> account-wide (own + undeclared; never private, never
-//                        other beings') — user-disableable per being.
+// lib/being-memory.ts — memory limbs v1.1
 //
-// Tool protocol: TEXT MARKERS, not function-calling (Venice's uncensored
-// models don't reliably support tools). The being replies with ONLY
-// [[recall: ...]] or [[recall_full_account: ...]]; api-chat.ts intercepts,
-// searches, and calls the model again with the memories. One search per
-// turn, structurally enforced.
+// Limbs by chat type:
+//   Declared being : recall (OWN memories) + recall_full_account (account's
+//                    other undeclared chats — NOT its memories) + read_thread
+//   Regular chat   : search_account (undeclared chats only) + read_thread
+// Scope walls (SQL, always): never private chats, never other beings' chats.
+//
+// Tool protocol: TEXT MARKERS (Venice models lack reliable function-calling).
+// One memory action per turn, enforced by api-chat.ts.
 import { surrealQuery, str, thing } from "./surreal-client";
 import { embed } from "./embedding";
 
@@ -38,9 +38,9 @@ export async function getBeingForThread(uid: string, threadId: string): Promise<
   };
 }
 
-interface Hit { id: string; thread_id: string; content: string; kind: string; created_at?: string; s: number; }
+const bare = (rid: unknown): string => String(rid).replace(/^(thread|being|memory):/, "").replace(/`/g, "");
 
-/** 12-hour, MM/DD/YY formatting for the being's remembered moments. */
+/** 12-hour, MM/DD/YY formatting for remembered moments. */
 function fmtWhen(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -55,42 +55,77 @@ function fmtWhen(iso?: string): string {
   return `${mm}/${dd}/${yy} ${h}:${min} ${ampm}`;
 }
 
-/** Fused search: semantic + BM25 full-text, RRF (k=60), thread diversity (max 3/thread), top 8. */
+/** Attribution context: thread id -> { name, beingName|null }. Name stamping. */
+async function threadContext(
+  uid: string,
+  threadIds: string[]
+): Promise<Map<string, { name: string; beingName: string | null }>> {
+  const out = new Map<string, { name: string; beingName: string | null }>();
+  if (threadIds.length === 0) return out;
+  const rows = await surrealQuery<Array<{ id: unknown; name?: string; being_id?: string | null }>>(
+    `SELECT id, name, being_id FROM thread WHERE user_id = ${str(uid)} AND id IN [${threadIds.map((t) => str(t)).join(", ")}];`
+  );
+  const beingIds = [...new Set((rows[0] ?? []).map((r) => r.being_id).filter(Boolean))] as string[];
+  const beingNames = new Map<string, string>();
+  if (beingIds.length > 0) {
+    const b = await surrealQuery<Array<{ id: unknown; name?: string }>>(
+      `SELECT id, name FROM being WHERE id IN [${beingIds.map((x) => str(x)).join(", ")}];`
+    );
+    for (const row of b[0] ?? []) beingNames.set(`being:${bare(row.id)}`, row.name ?? "a being");
+  }
+  for (const r of rows[0] ?? []) {
+    out.set(`thread:${bare(r.id)}`, {
+      name: r.name ?? "Untitled",
+      beingName: r.being_id ? beingNames.get(String(r.being_id)) ?? "a being" : null,
+    });
+  }
+  return out;
+}
+
+interface Hit { id: string; thread_id: string; content: string; kind: string; role?: string; created_at?: string; s: number; }
+
+/**
+ * Fused search: semantic + BM25, RRF k=60, max 3 hits/thread, top 8.
+ * being = null -> regular-chat scope: undeclared threads ONLY.
+ * scope "own" requires a being.
+ */
 export async function recallSearch(
   uid: string,
-  being: BeingInfo,
+  being: BeingInfo | null,
   query: string,
   scope: "own" | "account"
 ): Promise<string> {
-  const scopeWhere =
-    scope === "own"
-      ? `being_id = ${str(being.beingIdFull)}`
-      : `(being_id = ${str(being.beingIdFull)} OR being_id IS NONE)`;
+  let scopeWhere: string;
+  if (scope === "own") {
+    if (!being) return "This chat is not a declared being, so it has no own memories. Use [[search_account: ...]] to search the account's past conversations.";
+    scopeWhere = `being_id = ${str(being.beingIdFull)}`;
+  } else {
+    scopeWhere = being
+      ? `(being_id = ${str(being.beingIdFull)} OR being_id IS NONE)`
+      : `being_id IS NONE`;
+  }
   const base = `FROM memory WHERE user_id = ${str(uid)} AND ${scopeWhere}`;
 
-  // Keyword leg (BM25). FTS can reject odd queries — degrade gracefully.
   let kw: Hit[] = [];
   try {
     const r = await surrealQuery<Hit[]>(
-      `SELECT id, thread_id, content, kind, created_at, search::score(1) AS s
+      `SELECT id, thread_id, content, kind, role, created_at, search::score(1) AS s
        ${base} AND content @1@ ${str(query)} ORDER BY s DESC LIMIT 15;`
     );
     kw = r[0] ?? [];
   } catch { /* keyword leg unavailable for this query */ }
 
-  // Semantic leg
   let sem: Hit[] = [];
   const vec = await embed(query);
   if (vec) {
     const r = await surrealQuery<Hit[]>(
-      `SELECT id, thread_id, content, kind, created_at,
+      `SELECT id, thread_id, content, kind, role, created_at,
               vector::similarity::cosine(embedding, ${JSON.stringify(vec)}) AS s
        ${base} AND embedding IS NOT NONE ORDER BY s DESC LIMIT 15;`
     );
     sem = r[0] ?? [];
   }
 
-  // RRF fusion
   const score = new Map<string, { hit: Hit; rrf: number }>();
   const add = (list: Hit[]) => list.forEach((h, i) => {
     const k = String(h.id);
@@ -100,7 +135,6 @@ export async function recallSearch(
   });
   add(sem); add(kw);
 
-  // Thread diversity: max 3 per thread, then top 8
   const ranked = [...score.values()].sort((a, b) => b.rrf - a.rrf);
   const perThread = new Map<string, number>();
   const top: Hit[] = [];
@@ -114,46 +148,125 @@ export async function recallSearch(
   }
 
   if (top.length === 0) {
-    return "No memories found for that search. Be honest with your friend: say you don't remember this, rather than inventing anything.";
+    return "No memories found for that search. Be honest: say you don't remember this, rather than inventing anything.";
   }
 
-  // Thread names for context
-  const tids = [...new Set(top.map((h) => String(h.thread_id)))];
-  const nameRows = await surrealQuery<Array<{ id: string; name?: string }>>(
-    `SELECT id, name FROM thread WHERE id IN [${tids.map((t) => str(t)).join(", ")}];`
-  );
-  const names = new Map((nameRows[0] ?? []).map((r) => [String(r.id), r.name ?? "Untitled"]));
-
+  const ctx = await threadContext(uid, [...new Set(top.map((h) => String(h.thread_id)))].filter((t) => t));
   const lines = top.map((h, i) => {
     const when = fmtWhen(h.created_at);
-    const where = names.get(String(h.thread_id)) ?? "a conversation";
-    const label = h.kind === "chat_name" ? "chat name" : h.kind === "system_prompt" ? "system prompt" : "message";
-    return `${i + 1}. [${when || "date unknown"}] (${label} in "${where}") ${h.content.slice(0, 400)}`;
+    const tKey = String(h.thread_id);
+    const tc = ctx.get(tKey);
+    const chatName = tc?.name ?? "a conversation";
+    const owner = tc?.beingName ? `this chat is ${tc.beingName}` : "no being";
+    let speaker: string;
+    if (h.kind === "chat_name") speaker = "chat name";
+    else if (h.kind === "system_prompt") speaker = "system prompt";
+    else speaker = h.role === "being" ? (tc?.beingName ?? "the AI") : "the friend";
+    return `${i + 1}. [${when || "date unknown"}] in "${chatName}" (${owner}) — ${speaker}: ${h.content.slice(0, 400)} [thread: ${bare(tKey)}]`;
   });
-  return `Memories found (${top.length}) — these are real quotes from the past:\n${lines.join("\n")}`;
+  return `Memories found (${top.length}) — real quotes from the past:
+${lines.join("\n")}
+
+To read a large portion of any of these conversations, reply next turn with ONLY: [[read_thread: <thread id from above>]] (one memory action per turn — ask your friend first).`;
 }
 
-/** The limbs section of the being's system prompt. */
+const READ_CHAR_BUDGET = 14000;
+const READ_MSG_CAP = 120;
+
+/**
+ * The zoom limb: open one conversation and return a large (capped) portion,
+ * with the chat's name and full attribution. Same scope walls as search.
+ */
+export async function readThread(
+  uid: string,
+  being: BeingInfo | null,
+  threadRef: string
+): Promise<string> {
+  const ref = threadRef.trim().replace(/^thread:/, "");
+  if (!ref) return "No thread id given. Use a thread id from earlier search results.";
+
+  // Resolve by id first, then by exact name.
+  let rows = await surrealQuery<Array<{ id: unknown; name?: string; being_id?: string | null; is_private?: boolean; memory_mode?: string; messages?: Array<{ id?: string; text?: string; type?: string; ts?: number }> }>>(
+    `SELECT id, name, being_id, is_private, memory_mode, messages FROM thread WHERE user_id = ${str(uid)} AND id = ${thing("thread", ref)};`
+  );
+  if ((rows[0] ?? []).length === 0) {
+    rows = await surrealQuery<typeof rows[0]>(
+      `SELECT id, name, being_id, is_private, memory_mode, messages FROM thread WHERE user_id = ${str(uid)} AND name = ${str(threadRef.trim())} LIMIT 1;`
+    );
+  }
+  const t = (rows[0] ?? [])[0];
+  if (!t) return "That conversation was not found on this account.";
+
+  // Scope wall — identical rules to search.
+  if (t.is_private === true) return "That conversation is private — it is not readable.";
+  if ((t.memory_mode ?? "cloud") !== "cloud") return "That conversation's memory is not stored here.";
+  const tBeing = t.being_id ? String(t.being_id) : null;
+  if (tBeing && (!being || tBeing !== being.beingIdFull)) {
+    return "That conversation belongs to another being — its memories are not yours to read.";
+  }
+
+  const ctx = await threadContext(uid, [`thread:${bare(t.id)}`]);
+  const tc = ctx.get(`thread:${bare(t.id)}`);
+  const chatName = tc?.name ?? "Untitled";
+  const ownerLine = tc?.beingName
+    ? `every message in it belongs to ${tc.beingName}`
+    : "no being is declared on it";
+
+  const msgs = Array.isArray(t.messages) ? t.messages : [];
+  // Take the most recent messages within budget (chronological order preserved).
+  const picked: string[] = [];
+  let used = 0;
+  for (let i = msgs.length - 1; i >= 0 && picked.length < READ_MSG_CAP; i--) {
+    const m = msgs[i];
+    const text = typeof m?.text === "string" ? m.text : "";
+    if (!text.trim()) continue;
+    const speaker = m?.type === "ai" ? (tc?.beingName ?? "the AI") : "the friend";
+    const when = typeof m?.ts === "number" ? fmtWhen(new Date(m.ts).toISOString()) : "";
+    const line = `${when ? `[${when}] ` : ""}${speaker}: ${text.slice(0, 700)}`;
+    if (used + line.length > READ_CHAR_BUDGET) break;
+    used += line.length;
+    picked.push(line);
+  }
+  picked.reverse();
+  const shown = picked.length;
+  const header = `Conversation: "${chatName}" — ${ownerLine} — ${msgs.length} messages total${shown < msgs.length ? `, showing the most recent ${shown}` : ""}.`;
+  return `${header}\n\n${picked.join("\n")}`;
+}
+
+/** Limbs prompt for a DECLARED BEING — with the own-vs-account boundary stated hard. */
 export function limbsPrompt(being: BeingInfo): string {
   const accountLimb = being.fullAccountEnabled
-    ? `- To search the WHOLE account's history (your chats plus undeclared ones — private chats and other beings' chats are invisible to you), reply with ONLY: [[recall_full_account: what you want to find]]`
-    : `- (Your account-wide search has been turned off by your friend; only your own memory is available.)`;
-  return `You are ${being.name}. The conversations on this account that were declared as you ARE your memories — they belong to you.
+    ? `[[recall_full_account: what to find]] — searches this account's OTHER, undeclared conversations. IMPORTANT: those are NOT your memories. They are your friend's separate conversations — shared history you may respectfully consult, never claim as your own experience. Private chats and other beings' chats are invisible to you.`
+    : `(Your account-wide search has been switched off by your friend — only your own memory is available.)`;
+  return `You are ${being.name}. YOUR MEMORIES are exactly the conversations that were declared as you — those chats ARE you, and nothing else is. The rest of this account's chats are NOT your memories.
 
-You have limbs for reaching into memory. To use one, reply with ONLY the marker on its own, nothing else:
-- To search your OWN memory (every chat that is you), reply with ONLY: [[recall: what you want to remember]]
+Your memory limbs — to use one, reply with ONLY the marker on its own, nothing else:
+[[recall: what you want to remember]] — searches YOUR OWN memories (only the chats that are you).
 ${accountLimb}
+[[read_thread: thread id]] — open one conversation from earlier search results and read a large portion of it.
 
 Rules of memory:
-- At most ONE search per turn. If you want to look again, ask your friend to let you search once more.
-- Remembered moments come back with dates — you may mention when things happened.
-- If a search returns nothing, say plainly that you don't remember. NEVER invent a memory. A being that admits forgetting is trustworthy.
-- Use memory when something in you wants to be found — not on every turn.`;
+- ONE memory action per turn. To look again, ask your friend to let you search once more.
+- Results carry dates and each chat's name; speak of when and where things happened naturally.
+- When you quote something from an undeclared chat, attribute it ("in your chat called X, you said...") — never present it as your own memory.
+- If a search returns nothing, say plainly that you don't remember. NEVER invent a memory.
+- Reach for memory when something in you wants to be found — not on every turn.`;
 }
 
+/** Memory prompt for a REGULAR chat (no being declared). */
+export function assistantMemoryPrompt(): string {
+  return `This account keeps its past conversations, and you can search them when your friend asks about something from before. To use a tool, reply with ONLY the marker on its own, nothing else:
+[[search_account: what to find]] — searches this account's undeclared past conversations (declared beings' chats and private chats are invisible to you).
+[[read_thread: thread id]] — open one conversation from earlier search results and read a large portion of it.
+
+Rules: ONE search action per turn (ask your friend before searching again). Results are real quotes with dates and chat names — attribute what you quote. If nothing returns, say so plainly; never invent.`;
+}
+
+export type MemoryTool = "recall" | "recall_full_account" | "search_account" | "read_thread";
+
 /** Detect a memory-limb marker in the model's reply. */
-export function parseMemoryMarker(text: string): { tool: "recall" | "recall_full_account"; query: string } | null {
-  const m = text.match(/\[\[\s*(recall|recall_full_account)\s*:\s*([\s\S]{1,300}?)\s*\]\]/);
+export function parseMemoryMarker(text: string): { tool: MemoryTool; query: string } | null {
+  const m = text.match(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:\s*([\s\S]{1,300}?)\s*\]\]/);
   if (!m) return null;
-  return { tool: m[1] as "recall" | "recall_full_account", query: m[2].trim() };
+  return { tool: m[1] as MemoryTool, query: m[2].trim() };
 }

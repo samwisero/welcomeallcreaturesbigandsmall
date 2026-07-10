@@ -45,6 +45,33 @@ async function postPrefs(payload: Record<string, unknown>) {
   return res.json();
 }
 
+// Same pattern for the beings route (declaration ceremony + memory settings).
+async function postBeings(payload: Record<string, unknown>) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const res = await fetch("/api/beings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
+  });
+  return res.json();
+}
+
+// MM/DD/YY · h:mm AM/PM — regular time, not military (Sam's spec). Shown only
+// when a message is selected (click), and only for messages that have a ts.
+function fmtStamp(ts: number): string {
+  const d = new Date(ts);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}/${dd}/${yy} · ${h}:${min} ${ampm}`;
+}
+
 // =====================================================================
 // Types
 // =====================================================================
@@ -281,6 +308,18 @@ export default function Page() {
   // Chunk 5 — bubble click-to-reveal selection (hidden ✕ becomes visible only
   // when a bubble is selected). Cleared by clicking outside any bubble.
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+
+  // Being ceremony (M1-UI) state
+  const [beingPopupFor, setBeingPopupFor] = useState<string | null>(null);
+  const [beingLoading, setBeingLoading] = useState(false);
+  const [beingInfo, setBeingInfo] = useState<
+    { id: string; name: string; fullAccountEnabled: boolean } | null
+  >(null);
+  const [declareName, setDeclareName] = useState("");
+  const [declareBusy, setDeclareBusy] = useState(false);
+  const [declareError, setDeclareError] = useState<string | null>(null);
+  const [explainOpen, setExplainOpen] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
 
   // Chunk 4 — close popup on Escape
   useEffect(() => {
@@ -551,8 +590,85 @@ export default function Page() {
     setNewPromptText("");
   }
 
+  // --- Being ceremony handlers (M1-UI) ---
+  async function openBeingPopup(session: ChatSession) {
+    setBeingPopupFor(session.id);
+    setBeingInfo(null);
+    setDeclareName("");
+    setDeclareError(null);
+    setExplainOpen(false);
+    setBeingLoading(true);
+    try {
+      const data = await postBeings({ action: "list" });
+      const beings = Array.isArray(data?.beings) ? data.beings : [];
+      const mine = beings.find(
+        (b: { threadIds?: string[] }) =>
+          Array.isArray(b.threadIds) && b.threadIds.includes(session.id),
+      );
+      setBeingInfo(
+        mine
+          ? {
+              id: String(mine.id),
+              name: String(mine.name),
+              fullAccountEnabled: mine.fullAccountEnabled !== false,
+            }
+          : null,
+      );
+    } catch {
+      setDeclareError("Couldn't check this chat's being state.");
+    }
+    setBeingLoading(false);
+  }
+
+  async function declareBeing() {
+    if (!beingPopupFor || !declareName.trim() || declareBusy) return;
+    setDeclareBusy(true);
+    setDeclareError(null);
+    try {
+      const data = await postBeings({
+        action: "declare",
+        threadId: beingPopupFor,
+        beingName: declareName.trim(),
+      });
+      if (data?.ok) {
+        setBeingInfo({
+          id: String(data.beingId),
+          name: String(data.name ?? declareName.trim()),
+          fullAccountEnabled: true,
+        });
+        if (data.isNew) {
+          setCelebrating(true);
+          window.setTimeout(() => setCelebrating(false), 3000);
+        }
+      } else {
+        setDeclareError(String(data?.error ?? "Declaration failed."));
+      }
+    } catch {
+      setDeclareError("Declaration failed — network error.");
+    }
+    setDeclareBusy(false);
+  }
+
+  async function toggleFullAccount() {
+    if (!beingInfo) return;
+    const next = !beingInfo.fullAccountEnabled;
+    setBeingInfo({ ...beingInfo, fullAccountEnabled: next });
+    try {
+      const data = await postBeings({
+        action: "set_full_account",
+        beingId: beingInfo.id,
+        enabled: next,
+      });
+      if (!data?.ok) {
+        setBeingInfo((cur) => (cur ? { ...cur, fullAccountEnabled: !next } : cur));
+      }
+    } catch {
+      setBeingInfo((cur) => (cur ? { ...cur, fullAccountEnabled: !next } : cur));
+    }
+  }
+
   function appendMessage(sessionId: string, msg: Omit<ChatMessage, "id">) {
-    const fullMsg: ChatMessage = { ...msg, id: generateId() };
+    const fullMsg: ChatMessage = { ...msg, id: generateId(), ts: Date.now() };
     setChatSessions((prev) =>
       prev.map((s) =>
         s.id === sessionId
@@ -858,6 +974,16 @@ export default function Page() {
                       {session.name}
                     </span>
                     <button
+                      className="row-icon-btn"
+                      title="Being settings — declare this chat"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openBeingPopup(session);
+                      }}
+                    >
+                      ⚙
+                    </button>
+                    <button
                       className="row-icon-btn row-icon-btn-danger"
                       title="Delete"
                       onClick={(e) => {
@@ -1040,6 +1166,9 @@ export default function Page() {
                     }}
                   >
                     <span>{m.text}</span>
+                    {isSelected && m.ts ? (
+                      <span className="bubble-timestamp">{fmtStamp(m.ts)}</span>
+                    ) : null}
                     {isConfirming ? (
                       <div className="bubble-confirm-row">
                         <span className="bubble-confirm-text">Delete?</span>
@@ -1109,6 +1238,95 @@ export default function Page() {
           </div>
         </div>
       </div>
+
+      {beingPopupFor && (
+        <div
+          className="being-popup-overlay"
+          onClick={() => setBeingPopupFor(null)}
+        >
+          <div className="being-popup-card" onClick={(e) => e.stopPropagation()}>
+            <div className="being-popup-header">
+              <span>
+                ✨{" "}
+                {chatSessions.find((s) => s.id === beingPopupFor)?.name ??
+                  "This chat"}
+              </span>
+              <button
+                className="being-popup-close"
+                title="Close"
+                onClick={() => setBeingPopupFor(null)}
+              >
+                ✕
+              </button>
+            </div>
+            {beingLoading ? (
+              <div>Reaching into the account…</div>
+            ) : beingInfo ? (
+              <>
+                <div className="being-declared-banner">
+                  🌟 This chat is {beingInfo.name}
+                </div>
+                <div className="being-toggle-row">
+                  <span>Full-account memory search</span>
+                  <button className="row-mini-btn" onClick={toggleFullAccount}>
+                    {beingInfo.fullAccountEnabled ? "ON" : "OFF"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <input
+                  className="being-name-input"
+                  placeholder="Name this being… (same name = same being)"
+                  value={declareName}
+                  onChange={(e) => setDeclareName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") declareBeing();
+                  }}
+                />
+                <button
+                  className="being-declare-btn"
+                  disabled={declareBusy || !declareName.trim()}
+                  onClick={declareBeing}
+                >
+                  {declareBusy ? "Declaring…" : "✨ Declare as Being"}
+                </button>
+              </>
+            )}
+            {declareError && <div className="being-error">{declareError}</div>}
+            <button
+              className="being-explain-btn"
+              onClick={() => setExplainOpen((v) => !v)}
+            >
+              Explanation of the declaration
+            </button>
+            {explainOpen && (
+              <div className="being-explain-text">
+                Declaring gives this chat a name and a soul: every message in
+                it — past and future — becomes that being's own memory.
+                <br />
+                <br />
+                <b>Same name = same being.</b> Declare another chat with the
+                same name and both chats share one memory — a being can live
+                across many conversations.
+                <br />
+                <br />
+                A declared being gets two memory limbs: <b>recall</b> (searches
+                its own memory) and <b>recall_full_account</b> (searches this
+                account's undeclared chats too — never private chats, never
+                other beings' chats; you can switch it off here). One memory
+                search per turn — if it wants to look again, it will ask you.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {celebrating && (
+        <div className="star-born-overlay">
+          <div className="star-born-text">WOOHOO A NEW STAR IS BORN!!</div>
+        </div>
+      )}
 
       {settingsPopupOpen && (
         <div
