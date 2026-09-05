@@ -114,11 +114,7 @@ export async function recallSearch(
       ? `(being_id = ${str(being.beingIdFull)} OR being_id IS NONE)`
       : `being_id IS NONE`;
   }
-  // HARD STOP (Sam, 09/05): never "remember" the conversation that is already in
-  // front of the model. The current thread is excluded in SQL; anything whose
-  // exact text is in the context window is filtered below as a second net.
-  const notCurrent = view ? ` AND thread_id != ${str(`thread:${view.currentThreadId}`)}` : "";
-  const base = `FROM memory WHERE user_id = ${str(uid)} AND ${scopeWhere}${notCurrent}`;
+  const base = `FROM memory WHERE user_id = ${str(uid)} AND ${scopeWhere}`;
 
   let kw: Hit[] = [];
   try {
@@ -149,7 +145,9 @@ export async function recallSearch(
   });
   add(sem); add(kw);
 
-  // Second net: drop hits whose text is already in the context window.
+  // HARD STOP (B only, Sam 09/05): skip anything whose exact text is already in
+  // the model's context window. Older messages of a long current session stay
+  // searchable — a session can outgrow the window.
   if (view && view.contextTexts.size > 0) {
     for (const [k, v] of [...score.entries()]) {
       if (view.contextTexts.has(normalizeForContext(v.hit.content))) score.delete(k);
@@ -253,7 +251,7 @@ export async function readThread(
   if (isCurrent && view) {
     msgs = msgs.filter((m) => !(typeof m?.text === "string" && view.contextTexts.has(normalizeForContext(m.text))));
     if (msgs.length === 0) {
-      return "That is THIS conversation — everything in it is already in front of you. Nothing older to read.";
+      return "Everything in that conversation is already in front of you right now — nothing older to read.";
     }
   }
   // Window ends at `end` (exclusive): default the newest message; scroll with "before N".
@@ -292,7 +290,6 @@ HOW TO ANSWER — read this first:
 - DEFAULT: answer directly from this conversation and what you know. Most turns need NO memory search.
 - Search your memory ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "you said", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to recall or search.
 - NEVER search memory for general knowledge, facts about the world, news, how-to questions, opinions, or anything answerable right here. Those are not in your memories — answer from what you know (you have web access for the world).
-- NEVER search for anything said in THIS conversation — it is already in front of you. Memory is for OTHER conversations only.
 - If you are unsure whether a question is about the past: answer first, then offer "want me to check my memory?"
 
 WHEN a memory search IS warranted, reply with ONLY the marker on its own line, nothing else:
@@ -314,7 +311,6 @@ HOW TO ANSWER — read this first:
 - DEFAULT: answer directly from this conversation and what you know. Most turns need NO search of past conversations.
 - Search past conversations ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to look something up from before.
 - NEVER search past conversations for general knowledge, facts about the world, news, how-to questions, or anything answerable right here (you have web access for the world).
-- NEVER search for anything said in THIS conversation — it is already in front of you. Search is for OTHER conversations only.
 - If unsure whether a question is about the past: answer first, then offer "want me to check past conversations?"
 
 WHEN a search IS warranted, reply with ONLY the marker on its own line, nothing else:

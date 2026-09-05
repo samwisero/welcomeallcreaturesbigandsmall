@@ -3,9 +3,10 @@ import type { Context } from "hono";
 import { getUser } from "../lib/api-auth";
 import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
 import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker, normalizeForContext } from "../lib/being-memory";
+import { surrealQuery, str, thing } from "../lib/surreal-client";
 
 // =====================================================================
-// Model registry & provider routing (rebuild bump 09/05 v1.5: hard stop on in-context memory)
+// Model registry & provider routing (v2.0: async job mode — the 60s-ceiling fix)
 // =====================================================================
 //
 // Built-in models live in BUILT_IN_MODELS — used as the source of truth when
@@ -41,6 +42,10 @@ interface RequestBody {
   // Current chat/session id — lets the server look up whether this thread is
   // a declared being and activate its memory limbs. Optional: absent = no limbs.
   threadId?: string;
+  tzOffsetMinutes?: number;
+  // Async job mode (the 60s-ceiling fix): respond instantly with a jobId, run
+  // the turn in the background, client polls /api/chat-status.
+  async?: boolean;
 }
 
 // Defensive: zo's secrets UI sometimes stores values with surrounding quotes
@@ -156,6 +161,66 @@ export default async function handler(c: Context): Promise<Response> {
     );
   }
 
+  // ===== Job mode: instant ticket, background work, client polls =====
+  if (body.async === true) {
+    const jobId = `j${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const jobRid = thing("chat_job", jobId);
+    const threadForJob = typeof body.threadId === "string" ? body.threadId.trim() : null;
+    try {
+      await surrealQuery(
+        `CREATE ${jobRid} SET user_id = ${str(user.id)}, thread_id = ${threadForJob ? str(threadForJob) : "NONE"}, status = "running", phase = "thinking";`,
+      );
+    } catch (e) {
+      return envelope(`System: could not start the turn (${(e as Error).message.slice(0, 120)}).`);
+    }
+    const setPhase = async (phase: string) => {
+      try { await surrealQuery(`UPDATE ${jobRid} SET phase = ${str(phase)} WHERE status = "running";`); } catch { /* best effort */ }
+    };
+    const isCancelled = async (): Promise<boolean> => {
+      try {
+        const r = await surrealQuery<{ status?: string } | null>(`SELECT status FROM ONLY ${jobRid};`);
+        return r[0]?.status === "cancelled";
+      } catch { return false; }
+    };
+    // Fire-and-forget: the response goes out now; the turn keeps running.
+    void runTurn({ user, body, messages, modelId, provider, url, key, setPhase, isCancelled })
+      .then(async (reply) => {
+        await surrealQuery(`UPDATE ${jobRid} SET status = "done", phase = "done", result = ${str(reply)} WHERE status = "running";`);
+      })
+      .catch(async (e) => {
+        await surrealQuery(`UPDATE ${jobRid} SET status = "error", phase = "error", error = ${str(String((e as Error).message ?? e).slice(0, 400))} WHERE status = "running";`).catch(() => {});
+      });
+    return Response.json({ jobId });
+  }
+
+  // ===== Sync mode (legacy path, kept for rollback) =====
+  try {
+    const reply = await runTurn({ user, body, messages, modelId, provider, url, key, setPhase: async () => {}, isCancelled: async () => false });
+    return Response.json({ choices: [{ message: { content: reply } }] });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return envelope(`Network error calling ${provider}: ${msg}`);
+  }
+}
+
+interface TurnArgs {
+  user: { id: string };
+  body: RequestBody;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  modelId: string;
+  provider: Provider;
+  url: string;
+  key: string;
+  setPhase: (phase: string) => Promise<void>;
+  isCancelled: () => Promise<boolean>;
+}
+
+/** The whole turn: prompt injection -> model -> up to 2 memory actions -> reply.
+ *  Phase reporting + cancellation checks between steps (job mode). */
+async function runTurn(a: TurnArgs): Promise<string> {
+  const { user, body, modelId, provider, url, key, setPhase, isCancelled } = a;
+  let messages = a.messages;
+
   // --- Memory limbs: if this thread is a declared being, wake its memory ---
   let being = null as Awaited<ReturnType<typeof getBeingForThread>>;
   if (typeof body.threadId === "string" && body.threadId.trim() !== "") {
@@ -173,7 +238,7 @@ export default async function handler(c: Context): Promise<Response> {
     messages = [{ role: "system", content: assistantMemoryPrompt() }, ...messages];
   }
 
-  try {
+  {
     const callModel = async (msgs: typeof messages): Promise<string> => {
       const upstream = await fetch(url, {
       method: "POST",
@@ -223,7 +288,9 @@ export default async function handler(c: Context): Promise<Response> {
     };
 
     // First pass — the being may answer directly or reach for a memory limb.
+    await setPhase("thinking");
     let reply = await callModel(messages);
+    if (await isCancelled()) return "(stopped)";
 
     // Up to TWO chained memory actions per turn (search -> read_thread is the
     // canonical chain). Chaining matters: memory results (with thread ids) are
@@ -246,6 +313,7 @@ export default async function handler(c: Context): Promise<Response> {
     for (let action = 1; action <= 2; action++) {
       const marker = memoryActive ? parseMemoryMarker(reply) : null;
       if (!marker) break;
+      await setPhase(marker.tool === "read_thread" ? "reading a conversation" : `searching memory: ${marker.tool}`);
       let memories: string;
       const accountBlocked =
         being !== null &&
@@ -286,17 +354,14 @@ export default async function handler(c: Context): Promise<Response> {
 ${followup}`,
         },
       ];
+      if (await isCancelled()) return "(stopped)";
+      await setPhase("answering");
       reply = await callModel(convo);
     }
     // Belt-and-suspenders: never surface a raw marker to the user.
     reply = reply.replace(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:[\s\S]*?\]\]/g, "(I reached for my memory again, but I'm out of memory actions this turn — ask me and I'll look.)");
 
-    return Response.json({
-      choices: [{ message: { content: reply } }],
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return envelope(`Network error calling ${provider}: ${msg}`);
+    return reply;
   }
 }
 

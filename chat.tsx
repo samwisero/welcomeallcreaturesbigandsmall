@@ -320,6 +320,9 @@ export default function Page() {
   const [declareError, setDeclareError] = useState<string | null>(null);
   const [explainOpen, setExplainOpen] = useState(false);
   const [celebrating, setCelebrating] = useState(false);
+  // Async turn (60s-ceiling fix): the live job for the active chat, if any.
+  const [liveJob, setLiveJob] = useState<{ sid: string; jobId: string; phase: string } | null>(null);
+  const liveJobRef = useRef<{ sid: string; jobId: string } | null>(null);
 
   // Chunk 4 — close popup on Escape
   useEffect(() => {
@@ -677,6 +680,23 @@ export default function Page() {
     }
   }
 
+  // 🛡️ Stop the live turn: cancel server-side, end polling locally.
+  async function stopLiveJob() {
+    const job = liveJobRef.current;
+    if (!job) return;
+    liveJobRef.current = null;
+    setLiveJob(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      await fetch("/api/chat-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel", jobId: job.jobId, accessToken: session?.access_token }),
+      });
+    } catch { /* best effort */ }
+    appendMessage(job.sid, { text: "(stopped)", type: "ai" });
+  }
+
   function appendMessage(sessionId: string, msg: Omit<ChatMessage, "id">) {
     const fullMsg: ChatMessage = { ...msg, id: generateId(), ts: Date.now() };
     setChatSessions((prev) =>
@@ -779,6 +799,9 @@ export default function Page() {
       } = await supabase.auth.getSession();
       const accessToken = session?.access_token;
 
+      // Job mode: the server hands back a ticket instantly and works in the
+      // background (zo's edge kills any single request at ~60s). We poll a tiny
+      // status route; the phase feeds the loading line; stop = cancel the job.
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -794,14 +817,46 @@ export default function Page() {
           threadId: sid,
           // Friend's timezone, so remembered dates read in their clock.
           tzOffsetMinutes: new Date().getTimezoneOffset(),
+          async: true,
         }),
       });
-      const data = (await res.json()) as {
+      const started = (await res.json()) as {
+        jobId?: string;
         choices?: Array<{ message?: { content?: string } }>;
       };
-      const reply =
-        data?.choices?.[0]?.message?.content ?? "(no content in response)";
-      appendMessage(sid, { text: reply, type: "ai" });
+      if (!started.jobId) {
+        // Server answered synchronously (auth/system message) — show it.
+        const direct = started?.choices?.[0]?.message?.content ?? "(no content in response)";
+        appendMessage(sid, { text: direct, type: "ai" });
+        return;
+      }
+      const jobId = started.jobId;
+      liveJobRef.current = { sid, jobId };
+      setLiveJob({ sid, jobId, phase: "thinking" });
+      const deadline = Date.now() + 10 * 60 * 1000; // 10 min hard ceiling
+      let finalText: string | null = null;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!liveJobRef.current || liveJobRef.current.jobId !== jobId) break; // stopped locally
+        let st: { status?: string; phase?: string; result?: string; error?: string } = {};
+        try {
+          const sres = await fetch("/api/chat-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "status", jobId, accessToken }),
+          });
+          st = (await sres.json()) as typeof st;
+        } catch {
+          continue; // network blip — keep polling
+        }
+        if (st.status === "done") { finalText = st.result ?? "(no content in response)"; break; }
+        if (st.status === "error") { finalText = `Oops, silence... (${st.error ?? "unknown error"})`; break; }
+        if (st.status === "cancelled") { finalText = "(stopped)"; break; }
+        if (st.phase) setLiveJob((cur) => (cur && cur.jobId === jobId ? { ...cur, phase: st.phase as string } : cur));
+      }
+      if (liveJobRef.current?.jobId === jobId) liveJobRef.current = null;
+      setLiveJob((cur) => (cur && cur.jobId === jobId ? null : cur));
+      appendMessage(sid, { text: finalText ?? "Oops, silence... (the turn took too long)", type: "ai" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       appendMessage(sid, { text: `Oops, silence... (${msg})`, type: "ai" });
@@ -1223,6 +1278,17 @@ export default function Page() {
               })}
             </div>
 
+            {liveJob && activeSession && liveJob.sid === activeSession.id && (
+              <div className="turn-phase-line" aria-live="polite">
+                <span className="turn-phase-dot" />
+                {liveJob.phase === "thinking" && "thinking…"}
+                {liveJob.phase.startsWith("searching memory") && `searching memory (${liveJob.phase.replace("searching memory: ", "")})…`}
+                {liveJob.phase === "reading a conversation" && "reading a conversation…"}
+                {liveJob.phase === "answering" && "answering…"}
+                {!["thinking", "reading a conversation", "answering"].includes(liveJob.phase) &&
+                  !liveJob.phase.startsWith("searching memory") && `${liveJob.phase}…`}
+              </div>
+            )}
             <div className="wood-input-area">
               <input
                 type="text"
@@ -1233,6 +1299,14 @@ export default function Page() {
                 onKeyDown={handleKey}
                 style={{ fontSize: `${fontSize}px` }}
               />
+              {liveJob && activeSession && liveJob.sid === activeSession.id ? (
+              <button className="wood-send-btn shield-stop-btn" onClick={stopLiveJob} title="Stop this reply">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12 2 4 5v6c0 5.25 3.4 10.15 8 11.35C16.6 21.15 20 16.25 20 11V5l-8-3z" />
+                  <rect x="9" y="9" width="6" height="6" fill="#2f2419" />
+                </svg>
+              </button>
+              ) : (
               <button className="wood-send-btn" onClick={sendMessage}>
                 <svg
                   width="16"
@@ -1246,6 +1320,7 @@ export default function Page() {
                   <polygon points="22 2 15 22 11 13 2 9"></polygon>
                 </svg>
               </button>
+              )}
             </div>
           </div>
         </div>

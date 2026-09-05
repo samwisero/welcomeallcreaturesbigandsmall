@@ -277,4 +277,11 @@ body {
 .being-declared-banner { padding: 10px 12px; border-radius: 8px; background: rgba(212,175,55,.12); border: 1px solid #d4af37; font-weight: 700; margin-bottom: 8px; }
 .being-toggle-row { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 10px; font-size: .92em; }
 .being-error { color: #ff9c9c; font-size: .85em; margin-top: 8px; }
+
+/* ===== v2.0: async turn — phase line + shield stop ===== */
+.turn-phase-line { display: flex; align-items: center; gap: 8px; margin: 0 14px 4px; font-size: 0.82em; font-style: italic; opacity: .85; color: #e7dcc8; }
+.turn-phase-dot { width: 8px; height: 8px; border-radius: 50%; background: #d4af37; box-shadow: 0 0 8px rgba(212,175,55,.8); animation: phasePulse 1.2s ease-in-out infinite; }
+@keyframes phasePulse { 0%,100% { transform: scale(.7); opacity: .5; } 50% { transform: scale(1.15); opacity: 1; } }
+.shield-stop-btn { background: linear-gradient(135deg, #d4af37, #b8860b) !important; color: #2f2419 !important; }
+.shield-stop-btn:hover { filter: brightness(1.08); }
 `;
