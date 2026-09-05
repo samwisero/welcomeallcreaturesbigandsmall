@@ -5,7 +5,7 @@ import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
 import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker } from "../lib/being-memory";
 
 // =====================================================================
-// Model registry & provider routing (rebuild bump 07/10 v1.3)
+// Model registry & provider routing (rebuild bump 09/05 v1.4: memory trigger discipline)
 // =====================================================================
 //
 // Built-in models live in BUILT_IN_MODELS — used as the source of truth when
@@ -289,3 +289,5 @@ ${followup}`,
     return envelope(`Network error calling ${provider}: ${msg}`);
   }
 }
+
+// scope-fix 2026-07-10: rebuilt to pick up lib/being-memory.ts record-id threadContext (tripwire suite run 1)

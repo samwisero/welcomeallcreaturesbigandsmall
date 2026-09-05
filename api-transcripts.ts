@@ -129,18 +129,23 @@ interface MsgShape { id?: unknown; text?: unknown; type?: unknown; ts?: unknown;
 async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<void> {
   // Which of these threads are memory-eligible? (cloud + not private)
   const idList = sessions.map((s) => thing("thread", s.id)).join(", ");
-  const flagsRes = await surrealQuery<Array<{ id: unknown; is_private?: boolean; memory_mode?: string }>>(
-    `SELECT id, is_private, memory_mode FROM thread WHERE id IN [${idList}];`
+  const flagsRes = await surrealQuery<Array<{ id: unknown; is_private?: boolean; memory_mode?: string; being_id?: string | null }>>(
+    `SELECT id, is_private, memory_mode, being_id FROM thread WHERE id IN [${idList}];`
   );
-  const eligible = new Set(
-    (flagsRes[0] ?? [])
-      .filter((t) => t.is_private !== true && (t.memory_mode ?? "cloud") === "cloud")
-      .map((t) => bareId(t.id))
-  );
+  // Eligible threads mapped to their being (or null) — every mirrored row is
+  // stamped with its thread's being_id so declared beings own their NEW
+  // memories too, not just the retro-stamped ones (tripwire finding 07/10).
+  const beingByThread = new Map<string, string | null>();
+  for (const t of flagsRes[0] ?? []) {
+    if (t.is_private === true || (t.memory_mode ?? "cloud") !== "cloud") continue;
+    // NOTE: bareId() strips "thread:" only — strip "being:" explicitly, or rows get
+    // stamped "being:being:…" (tripwire I3 caught exactly this on 09/05).
+    beingByThread.set(bareId(t.id), t.being_id ? `being:${String(t.being_id).replace(/^being:/, "").replace(/`/g, "")}` : null);
+  }
 
   const candidates: Array<{ mid: string; text: string; role: string; threadId: string; ts: number | null }> = [];
   for (const s of sessions) {
-    if (!eligible.has(s.id)) continue;
+    if (!beingByThread.has(s.id)) continue;
     for (const m of (s.messages ?? []) as MsgShape[]) {
       if (typeof m?.id !== "string" || typeof m?.text !== "string" || m.text.trim() === "") continue;
       candidates.push({
@@ -168,9 +173,11 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
   for (let i = 0; i < fresh.length; i++) {
     const v = vecs[i];
     const x = fresh[i];
+    const bId = beingByThread.get(x.threadId) ?? null;
     sql += `UPSERT ${thing("memory", x.mid)} SET
       user_id = ${str(uid)},
       thread_id = ${str(`thread:${x.threadId}`)},
+      being_id = ${bId ? str(bId) : "NONE"},
       message_id = ${str(x.mid)},
       role = ${str(x.role)},
       kind = "chat_message",
