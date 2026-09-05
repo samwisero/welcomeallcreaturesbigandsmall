@@ -371,6 +371,16 @@ export default function Page() {
             )
           : [];
         setCustomModels(cloudModels);
+        // Silent timezone capture (09/05): store the device's IANA zone + offset
+        // in prefs so the future autonomous loop knows when it is polite to
+        // reach out. No popup, no user input — the device already knows.
+        try {
+          const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const tzOffsetMinutes = new Date().getTimezoneOffset();
+          if (tzName && (prefs?.timezone !== tzName || prefs?.tzOffsetMinutes !== tzOffsetMinutes)) {
+            void postPrefs({ action: "save", prefs: { timezone: tzName, tzOffsetMinutes } });
+          }
+        } catch { /* Intl unavailable — skip silently */ }
       } catch (err) {
         console.error("Cloud prefs load failed", err);
       } finally {

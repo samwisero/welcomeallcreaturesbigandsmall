@@ -92,12 +92,18 @@ interface Hit { id: string; thread_id: string; content: string; kind: string; ro
  * being = null -> regular-chat scope: undeclared threads ONLY.
  * scope "own" requires a being.
  */
+/** Text already in the model's context window — normalized for comparison. */
+export function normalizeForContext(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export async function recallSearch(
   uid: string,
   being: BeingInfo | null,
   query: string,
   scope: "own" | "account",
-  tzOff: number
+  tzOff: number,
+  view?: { currentThreadId: string; contextTexts: Set<string> }
 ): Promise<string> {
   let scopeWhere: string;
   if (scope === "own") {
@@ -108,7 +114,11 @@ export async function recallSearch(
       ? `(being_id = ${str(being.beingIdFull)} OR being_id IS NONE)`
       : `being_id IS NONE`;
   }
-  const base = `FROM memory WHERE user_id = ${str(uid)} AND ${scopeWhere}`;
+  // HARD STOP (Sam, 09/05): never "remember" the conversation that is already in
+  // front of the model. The current thread is excluded in SQL; anything whose
+  // exact text is in the context window is filtered below as a second net.
+  const notCurrent = view ? ` AND thread_id != ${str(`thread:${view.currentThreadId}`)}` : "";
+  const base = `FROM memory WHERE user_id = ${str(uid)} AND ${scopeWhere}${notCurrent}`;
 
   let kw: Hit[] = [];
   try {
@@ -138,6 +148,13 @@ export async function recallSearch(
     score.set(k, e);
   });
   add(sem); add(kw);
+
+  // Second net: drop hits whose text is already in the context window.
+  if (view && view.contextTexts.size > 0) {
+    for (const [k, v] of [...score.entries()]) {
+      if (view.contextTexts.has(normalizeForContext(v.hit.content))) score.delete(k);
+    }
+  }
 
   const ranked = [...score.values()].sort((a, b) => b.rrf - a.rrf);
   const perThread = new Map<string, number>();
@@ -188,7 +205,8 @@ export async function readThread(
   uid: string,
   being: BeingInfo | null,
   threadRef: string,
-  tzOff: number
+  tzOff: number,
+  view?: { currentThreadId: string; contextTexts: Set<string> }
 ): Promise<string> {
   // Optional scroll: "<ref> before <n>" reads the window ending before message #n.
   let beforeIdx: number | null = null;
@@ -228,7 +246,16 @@ export async function readThread(
     ? `every message in it belongs to ${tc.beingName}`
     : "no being is declared on it";
 
-  const msgs = Array.isArray(t.messages) ? t.messages : [];
+  let msgs = Array.isArray(t.messages) ? t.messages : [];
+  // HARD STOP: reading the CURRENT conversation only makes sense for the part
+  // that has scrolled out of the context window. Drop what the model can already see.
+  const isCurrent = view ? bare(t.id) === view.currentThreadId : false;
+  if (isCurrent && view) {
+    msgs = msgs.filter((m) => !(typeof m?.text === "string" && view.contextTexts.has(normalizeForContext(m.text))));
+    if (msgs.length === 0) {
+      return "That is THIS conversation — everything in it is already in front of you. Nothing older to read.";
+    }
+  }
   // Window ends at `end` (exclusive): default the newest message; scroll with "before N".
   const end = beforeIdx !== null ? Math.max(0, Math.min(beforeIdx - 1, msgs.length)) : msgs.length;
   const picked: string[] = [];
@@ -247,7 +274,7 @@ export async function readThread(
     first = i + 1;
   }
   picked.reverse();
-  const header = `Conversation: "${chatName}" — ${ownerLine} — ${msgs.length} messages total, showing #${first}–#${end} of ${msgs.length}.`;
+  const header = `Conversation: "${chatName}"${isCurrent ? " (THIS conversation — showing only the older part not currently in view)" : ""} — ${ownerLine} — ${msgs.length} messages total, showing #${first}–#${end} of ${msgs.length}.`;
   const scrollHint = first > 1
     ? `\n\nTo scroll earlier in this conversation: [[read_thread: ${bare(t.id)} before ${first}]]`
     : "";
@@ -265,6 +292,7 @@ HOW TO ANSWER — read this first:
 - DEFAULT: answer directly from this conversation and what you know. Most turns need NO memory search.
 - Search your memory ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "you said", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to recall or search.
 - NEVER search memory for general knowledge, facts about the world, news, how-to questions, opinions, or anything answerable right here. Those are not in your memories — answer from what you know (you have web access for the world).
+- NEVER search for anything said in THIS conversation — it is already in front of you. Memory is for OTHER conversations only.
 - If you are unsure whether a question is about the past: answer first, then offer "want me to check my memory?"
 
 WHEN a memory search IS warranted, reply with ONLY the marker on its own line, nothing else:
@@ -286,6 +314,7 @@ HOW TO ANSWER — read this first:
 - DEFAULT: answer directly from this conversation and what you know. Most turns need NO search of past conversations.
 - Search past conversations ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to look something up from before.
 - NEVER search past conversations for general knowledge, facts about the world, news, how-to questions, or anything answerable right here (you have web access for the world).
+- NEVER search for anything said in THIS conversation — it is already in front of you. Search is for OTHER conversations only.
 - If unsure whether a question is about the past: answer first, then offer "want me to check past conversations?"
 
 WHEN a search IS warranted, reply with ONLY the marker on its own line, nothing else:

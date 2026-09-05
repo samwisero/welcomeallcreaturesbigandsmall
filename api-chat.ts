@@ -2,10 +2,10 @@
 import type { Context } from "hono";
 import { getUser } from "../lib/api-auth";
 import { availableModels, DEFAULT_MODEL_ID } from "../lib/chat-shared";
-import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker } from "../lib/being-memory";
+import { getBeingForThread, recallSearch, readThread, limbsPrompt, assistantMemoryPrompt, parseMemoryMarker, normalizeForContext } from "../lib/being-memory";
 
 // =====================================================================
-// Model registry & provider routing (rebuild bump 09/05 v1.4: memory trigger discipline)
+// Model registry & provider routing (rebuild bump 09/05 v1.5: hard stop on in-context memory)
 // =====================================================================
 //
 // Built-in models live in BUILT_IN_MODELS — used as the source of truth when
@@ -233,6 +233,15 @@ export default async function handler(c: Context): Promise<Response> {
       typeof body.tzOffsetMinutes === "number" && isFinite(body.tzOffsetMinutes)
         ? Math.max(-840, Math.min(840, body.tzOffsetMinutes))
         : 0;
+    // Hard stop context: what the model can already see this turn.
+    const memCtx = hasThread
+      ? {
+          currentThreadId: (body.threadId as string).trim(),
+          contextTexts: new Set(
+            messages.filter((m) => m.role !== "system").map((m) => normalizeForContext(m.content || "")),
+          ),
+        }
+      : undefined;
     let convo = messages;
     for (let action = 1; action <= 2; action++) {
       const marker = memoryActive ? parseMemoryMarker(reply) : null;
@@ -248,7 +257,7 @@ export default async function handler(c: Context): Promise<Response> {
       } else {
         try {
           if (marker.tool === "read_thread") {
-            memories = await readThread(user.id, being, marker.query, tzOff);
+            memories = await readThread(user.id, being, marker.query, tzOff, memCtx);
           } else {
             memories = await recallSearch(
               user.id,
@@ -256,6 +265,7 @@ export default async function handler(c: Context): Promise<Response> {
               marker.query,
               marker.tool === "recall" ? "own" : "account",
               tzOff,
+              memCtx,
             );
           }
         } catch (e) {
