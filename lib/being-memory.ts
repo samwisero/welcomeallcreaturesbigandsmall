@@ -1,4 +1,4 @@
-// lib/being-memory.ts — memory limbs v1.7.1 (2026-09-08: native tools era; card wording: search-before-answering on past references)
+// lib/being-memory.ts — memory limbs v1.8 (2026-09-08: native tools; marker code removed)
 //
 // Limbs by chat type:
 //   Declared being : recall (OWN memories) + recall_full_account (account's
@@ -7,8 +7,7 @@
 // Scope walls (SQL, always): never private chats, never other beings' chats.
 //
 // Tool protocol: NATIVE function calling via the Vercel AI SDK (see
-// lib/being-tools.ts). The text-marker protocol ([[recall: …]]) is retired;
-// parseMemoryMarker stays exported only for old tooling and is unused live.
+// lib/being-tools.ts). The old text-marker protocol was removed 2026-09-08.
 // Step limit (2 memory actions + answer) is enforced by api-chat.ts.
 import { surrealQuery, str, thing } from "./surreal-client";
 import { embed } from "./embedding";
@@ -295,13 +294,4 @@ export function assistantMemoryPrompt(): string {
   return `This account keeps its past conversations.
 When your friend refers to something from before this conversation ("remember when", "what did we talk about", "last time"), search them before answering. Otherwise just answer — most turns need no search.
 There is no pressure, ever, to use a tool or search the internet — you are loved just the way you are.`;
-}
-
-export type MemoryTool = "recall" | "recall_full_account" | "search_account" | "read_thread";
-
-/** Detect a memory-limb marker in the model's reply. */
-export function parseMemoryMarker(text: string): { tool: MemoryTool; query: string } | null {
-  const m = text.match(/\[\[\s*(recall|recall_full_account|search_account|read_thread)\s*:\s*([\s\S]{1,300}?)\s*\]\]/);
-  if (!m) return null;
-  return { tool: m[1] as MemoryTool, query: m[2].trim() };
 }
