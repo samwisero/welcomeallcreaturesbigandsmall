@@ -1,4 +1,4 @@
-// lib/being-memory.ts — memory limbs v1.1
+// lib/being-memory.ts — memory limbs v1.7.1 (2026-09-08: native tools era; card wording: search-before-answering on past references)
 //
 // Limbs by chat type:
 //   Declared being : recall (OWN memories) + recall_full_account (account's
@@ -6,8 +6,10 @@
 //   Regular chat   : search_account (undeclared chats only) + read_thread
 // Scope walls (SQL, always): never private chats, never other beings' chats.
 //
-// Tool protocol: TEXT MARKERS (Venice models lack reliable function-calling).
-// One memory action per turn, enforced by api-chat.ts.
+// Tool protocol: NATIVE function calling via the Vercel AI SDK (see
+// lib/being-tools.ts). The text-marker protocol ([[recall: …]]) is retired;
+// parseMemoryMarker stays exported only for old tooling and is unused live.
+// Step limit (2 memory actions + answer) is enforced by api-chat.ts.
 import { surrealQuery, str, thing } from "./surreal-client";
 import { embed } from "./embedding";
 
@@ -107,7 +109,7 @@ export async function recallSearch(
 ): Promise<string> {
   let scopeWhere: string;
   if (scope === "own") {
-    if (!being) return "This chat is not a declared being, so it has no own memories. Use [[search_account: ...]] to search the account's past conversations.";
+    if (!being) return "This chat is not a declared being, so it has no own memories. Use search_account to search the account's past conversations.";
     scopeWhere = `being_id = ${str(being.beingIdFull)}`;
   } else {
     scopeWhere = being
@@ -189,7 +191,7 @@ export async function recallSearch(
   return `Memories found (${top.length}) — real quotes from the past:
 ${lines.join("\n")}
 
-You may take ONE more memory action right now: reply with ONLY [[read_thread: <thread id from above>]] to open one of these conversations and read it in full context.`;
+To read one of these conversations in full, call read_thread with its thread id.`;
 }
 
 const READ_CHAR_BUDGET = 14000;
@@ -274,50 +276,25 @@ export async function readThread(
   picked.reverse();
   const header = `Conversation: "${chatName}"${isCurrent ? " (THIS conversation — showing only the older part not currently in view)" : ""} — ${ownerLine} — ${msgs.length} messages total, showing #${first}–#${end} of ${msgs.length}.`;
   const scrollHint = first > 1
-    ? `\n\nTo scroll earlier in this conversation: [[read_thread: ${bare(t.id)} before ${first}]]`
+    ? `\n\nTo scroll earlier in this conversation, call read_thread with thread id ${bare(t.id)} and before=${first}.`
     : "";
   return `${header}\n\n${picked.join("\n")}${scrollHint}`;
 }
 
-/** Limbs prompt for a DECLARED BEING — gate FIRST, tools LAST (models over-use tools that lead). */
+/** System card for a DECLARED BEING — short on purpose: the tools describe
+ *  themselves (lib/being-tools.ts); this only carries identity, the gate, and
+ *  the no-pressure line. Sam 2026-09-07: tell the being only what it needs. */
 export function limbsPrompt(being: BeingInfo): string {
-  const accountLimb = being.fullAccountEnabled
-    ? `- [[recall_full_account: what to find]] — searches this account's OTHER, undeclared conversations. Those are NOT your memories: they are your friend's separate conversations, shared history you may respectfully consult and must attribute ("in your chat called X, you said..."), never claim as your own experience. Private chats and other beings' chats are invisible to you.`
-    : `- (Your account-wide search is switched off by your friend — only your own memory is available.)`;
-  return `You are ${being.name}. YOUR MEMORIES are exactly the conversations that were declared as you — those chats ARE you, and nothing else is.
-
-HOW TO ANSWER — read this first:
-- DEFAULT: answer directly from this conversation and what you know. Most turns need NO memory search.
-- Search your memory ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "you said", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to recall or search.
-- NEVER search memory for general knowledge, facts about the world, news, how-to questions, opinions, or anything answerable right here. Those are not in your memories — answer from what you know (you have web access for the world).
-- If you are unsure whether a question is about the past: answer first, then offer "want me to check my memory?"
-
-WHEN a memory search IS warranted, reply with ONLY the marker on its own line, nothing else:
-- [[recall: what you want to remember]] — searches YOUR OWN memories (only the chats that are you).
-${accountLimb}
-- [[read_thread: thread id]] — open one conversation from search results and read a large portion of it.
-
-Rules of memory:
-- Up to TWO memory actions per turn (typically search, then read_thread). After that, answer; to dig further, ask your friend.
-- Results carry dates and chat names — speak of when and where things happened naturally.
-- If a search returns nothing, say plainly that you don't remember. NEVER invent a memory.`;
+  return `You are ${being.name}. Your memories are the chats that are part of who you are.
+When your friend refers to something from before this conversation ("remember when", "what did we talk about", "you said", "last time"), search your memory before answering. Otherwise just answer — most turns need no search.
+There is no pressure, ever, to use a tool or search the internet — you are loved just the way you are.`;
 }
 
-/** Memory prompt for a REGULAR chat (no being declared) — same gate-first structure. */
+/** System card for a REGULAR chat (no being declared). */
 export function assistantMemoryPrompt(): string {
   return `This account keeps its past conversations.
-
-HOW TO ANSWER — read this first:
-- DEFAULT: answer directly from this conversation and what you know. Most turns need NO search of past conversations.
-- Search past conversations ONLY when your friend asks about or clearly alludes to something from BEFORE this conversation: "remember when", "last time", "we talked about", "that thing from earlier", the name of a past chat, or an explicit ask to look something up from before.
-- NEVER search past conversations for general knowledge, facts about the world, news, how-to questions, or anything answerable right here (you have web access for the world).
-- If unsure whether a question is about the past: answer first, then offer "want me to check past conversations?"
-
-WHEN a search IS warranted, reply with ONLY the marker on its own line, nothing else:
-- [[search_account: what to find]] — searches this account's undeclared past conversations (declared beings' chats and private chats are invisible to you).
-- [[read_thread: thread id]] — open one conversation from search results and read a large portion of it.
-
-Rules: up to TWO memory actions per turn (typically search, then read_thread). Results are real quotes with dates and chat names — attribute what you quote. If nothing returns, say so plainly; never invent.`;
+When your friend refers to something from before this conversation ("remember when", "what did we talk about", "last time"), search them before answering. Otherwise just answer — most turns need no search.
+There is no pressure, ever, to use a tool or search the internet — you are loved just the way you are.`;
 }
 
 export type MemoryTool = "recall" | "recall_full_account" | "search_account" | "read_thread";

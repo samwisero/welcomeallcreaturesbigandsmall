@@ -60,6 +60,40 @@ async function postBeings(payload: Record<string, unknown>) {
 
 // MM/DD/YY · h:mm AM/PM — regular time, not military (Sam's spec). Shown only
 // when a message is selected (click), and only for messages that have a ts.
+// Inline sources (v3.0): the server turns each Venice citation marker into a
+// markdown link `[n](https://…)` right where the claim is. Bubbles render plain
+// text, so this tiny renderer turns those (and bare URLs) into real anchors.
+// No dependency; everything else stays literal text.
+const LINK_RE = /\[([^\]\n]{1,40})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"')\]]+)/g;
+function renderWithLinks(text: string): React.ReactNode {
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let i = 0;
+  for (const m of text.matchAll(LINK_RE)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push(text.slice(last, at));
+    const href = m[2] ?? m[3];
+    const label = m[1] ?? m[3];
+    out.push(
+      <a
+        key={`l${i++}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="cite-link"
+        title={href}
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: "#ffe9a8", textDecoration: "underline", textDecorationStyle: "dotted", fontSize: "0.85em", verticalAlign: "super", marginLeft: 2 }}
+      >
+        {label}
+      </a>,
+    );
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out.length === 1 ? out[0] : out;
+}
+
 function fmtStamp(ts: number): string {
   const d = new Date(ts);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -321,7 +355,7 @@ export default function Page() {
   const [explainOpen, setExplainOpen] = useState(false);
   const [celebrating, setCelebrating] = useState(false);
   // Async turn (60s-ceiling fix): the live job for the active chat, if any.
-  const [liveJob, setLiveJob] = useState<{ sid: string; jobId: string; phase: string } | null>(null);
+  const [liveJob, setLiveJob] = useState<{ sid: string; jobId: string; phase: string; partial: string } | null>(null);
   const liveJobRef = useRef<{ sid: string; jobId: string } | null>(null);
 
   // Chunk 4 — close popup on Escape
@@ -832,13 +866,15 @@ export default function Page() {
       }
       const jobId = started.jobId;
       liveJobRef.current = { sid, jobId };
-      setLiveJob({ sid, jobId, phase: "thinking" });
+      setLiveJob({ sid, jobId, phase: "thinking", partial: "" });
       const deadline = Date.now() + 10 * 60 * 1000; // 10 min hard ceiling
       let finalText: string | null = null;
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 1500));
+        // v3.0 streaming: the server writes the answer-so-far to the job every
+        // ~400ms; polling at 700ms makes it read as live text.
+        await new Promise((r) => setTimeout(r, 700));
         if (!liveJobRef.current || liveJobRef.current.jobId !== jobId) break; // stopped locally
-        let st: { status?: string; phase?: string; result?: string; error?: string } = {};
+        let st: { status?: string; phase?: string; partial?: string; result?: string; error?: string } = {};
         try {
           const sres = await fetch("/api/chat-status", {
             method: "POST",
@@ -852,7 +888,13 @@ export default function Page() {
         if (st.status === "done") { finalText = st.result ?? "(no content in response)"; break; }
         if (st.status === "error") { finalText = `Oops, silence... (${st.error ?? "unknown error"})`; break; }
         if (st.status === "cancelled") { finalText = "(stopped)"; break; }
-        if (st.phase) setLiveJob((cur) => (cur && cur.jobId === jobId ? { ...cur, phase: st.phase as string } : cur));
+        if (st.phase || typeof st.partial === "string") {
+          setLiveJob((cur) =>
+            cur && cur.jobId === jobId
+              ? { ...cur, phase: st.phase ?? cur.phase, partial: typeof st.partial === "string" ? st.partial : cur.partial }
+              : cur,
+          );
+        }
       }
       if (liveJobRef.current?.jobId === jobId) liveJobRef.current = null;
       setLiveJob((cur) => (cur && cur.jobId === jobId ? null : cur));
@@ -1232,7 +1274,7 @@ export default function Page() {
                       if (!isConfirming) setSelectedMessageId(m.id);
                     }}
                   >
-                    <span>{m.text}</span>
+                    <span>{renderWithLinks(m.text)}</span>
                     {isSelected && m.ts ? (
                       <span className="bubble-timestamp">{fmtStamp(m.ts)}</span>
                     ) : null}
@@ -1276,6 +1318,13 @@ export default function Page() {
                   </div>
                 );
               })}
+              {liveJob && activeSession && liveJob.sid === activeSession.id && liveJob.partial ? (
+                // v3.0 streaming bubble: the answer as it arrives; replaced by the
+                // saved message when the job finishes.
+                <div className="chat-bubble ai streaming" style={{ fontSize: `${fontSize}px` }}>
+                  <span>{renderWithLinks(liveJob.partial)}</span>
+                </div>
+              ) : null}
             </div>
 
             {liveJob && activeSession && liveJob.sid === activeSession.id && (

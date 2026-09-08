@@ -15,6 +15,7 @@ interface JobRow {
   phase?: string;  // thinking | searching memory: recall | reading a conversation | answering | done
   result?: string | null;
   error?: string | null;
+  partial?: string | null; // streamed answer-so-far while running (v3.0)
 }
 
 export default async function handler(c: Context): Promise<Response> {
@@ -46,6 +47,7 @@ export default async function handler(c: Context): Promise<Response> {
     return c.json({
       status: job.status ?? "running",
       phase: job.phase ?? "thinking",
+      partial: job.status === "running" ? job.partial ?? "" : undefined,
       result: job.status === "done" ? job.result ?? "" : undefined,
       error: job.status === "error" ? job.error ?? "unknown error" : undefined,
     });
