@@ -344,4 +344,28 @@ body {
   .wood-chat-overlay { top: 2.5%; bottom: 1.2%; left: 7%; right: 7%; }
   .header-chat-name { font-size: 1em; }
 }
+
+/* ===== UI v4.2 (2026-09-09 am): title in the sky, bold plain text, speaker names, mobile geometry restored ===== */
+.sky-bar { position: fixed; }
+.sky-title { position: absolute; left: 78px; right: 78px; top: 0; height: var(--sky-top); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; pointer-events: none; text-align: center; font-family: "Segoe UI", sans-serif; }
+.sky-chat-name { color: #ffffff; font-weight: 800; font-size: 16px; line-height: 1.15; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 10px rgba(0, 0, 0, 0.35); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.sky-prompt-name { color: #E2B44A; font-weight: 700; font-style: italic; font-size: 12.5px; line-height: 1.15; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.wood-chat-header { display: none !important; } /* the title lives in the sky now */
+/* plain-text mode: very bold, with speaker names (being in gold on the left, friend in light brown on the right) */
+.plain-text .chat-bubble { font-weight: 800; }
+.speaker { display: none; }
+.plain-text .speaker { display: block; font-size: 0.8em; font-weight: 800; letter-spacing: 0.03em; margin-bottom: 2px; opacity: 0.95; }
+.plain-text .chat-bubble.ai .speaker { color: #E2B44A; text-align: left; }
+.plain-text .chat-bubble.user .speaker { color: #d9b48a; text-align: right; }
+/* lion popup: your name */
+.lion-name-input { width: 100%; box-sizing: border-box; background: rgba(0, 0, 0, 0.35); color: #f5f5dc; border: 1px solid rgba(184, 134, 11, 0.6); border-radius: 8px; padding: 10px 12px; font-size: 15px; font-family: inherit; outline: none; }
+.lion-name-input:focus { border-color: rgba(226, 180, 74, 0.95); }
+/* mobile geometry: side margins back to the v4 values (bubbles fit again), header gone so the top is tight, input a touch up from the edge */
+@media (max-width: 768px) {
+  .wood-chat-overlay { top: 4%; bottom: 3.5%; left: 14%; right: 14%; }
+  .wood-chat-messages { padding: 8px 6px; }
+}
+@media (max-width: 480px) {
+  .wood-chat-overlay { top: 4%; bottom: 3.5%; left: 12%; right: 12%; }
+}
 `;

@@ -295,6 +295,7 @@ export default function Page() {
   const [walnutTheme, setWalnutTheme] = useState(false);
   const [solidBubbles, setSolidBubbles] = useState(false);
   const [plainText, setPlainText] = useState(false); // UI v4.1: bare white text instead of bubbles
+  const [displayName, setDisplayName] = useState(""); // UI v4.2: the friend's name, shown next to their lines in plain mode
   const [newChatName, setNewChatName] = useState("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
@@ -398,6 +399,7 @@ export default function Page() {
     (async () => {
       try {
         const { prefs } = await postPrefs({ action: "load" });
+        if (typeof prefs?.displayName === "string") setDisplayName(prefs.displayName);
         const cloudPrompts: SystemPrompt[] = Array.isArray(prefs?.userPrompts)
           ? prefs.userPrompts
           : [];
@@ -987,6 +989,14 @@ export default function Page() {
         >
           <span className="creature-glyph" />
         </button>
+        <div className="sky-title" aria-live="polite">
+          <div className="sky-chat-name">{activeSession ? activeSession.name : ""}</div>
+          <div className="sky-prompt-name">
+            {activeSession?.systemPromptId
+              ? systemPrompts.find((p) => p.id === activeSession.systemPromptId)?.name ?? "(deleted prompt)"
+              : "No System Prompt Selected"}
+          </div>
+        </div>
         <button
           className={`creature-btn lion-btn${lionOpen ? " open" : ""}`}
           aria-label="Account and settings"
@@ -1018,6 +1028,14 @@ export default function Page() {
           <button className="setting-btn" onClick={() => setPlainText((v) => !v)}>✎  Text style: {plainText ? "Plain" : "Bubbles"}</button>
           <button className="setting-btn" onClick={() => { setLionOpen(false); setSettingsPopupOpen(true); setAddModelFeedback(null); }} title="More settings">🌙  Advanced…</button>
           <div className="sky-card-title">Account</div>
+          <input
+            className="lion-name-input"
+            placeholder="Your name (shown next to your messages)"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            onBlur={() => { void postPrefs({ action: "save", prefs: { displayName: displayName.trim() } }); }}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          />
           <button className="setting-btn" onClick={handleLogout} title="Sign out">⎋  Log out</button>
         </div>
       )}
@@ -1279,6 +1297,9 @@ export default function Page() {
                       if (!isConfirming) setSelectedMessageId(m.id);
                     }}
                   >
+                    {(i === 0 || activeSession.messages[i - 1].type !== m.type) && (
+                      <span className="speaker">{m.type === "ai" ? activeSession.name : (displayName.trim() || "You")}</span>
+                    )}
                     <span>{renderWithLinks(m.text)}</span>
                     {isSelected && m.ts ? (
                       <span className="bubble-timestamp">{fmtStamp(m.ts)}</span>
@@ -1327,6 +1348,7 @@ export default function Page() {
                 // v3.0 streaming bubble: the answer as it arrives; replaced by the
                 // saved message when the job finishes.
                 <div className="chat-bubble ai streaming" style={{ fontSize: `${fontSize}px` }}>
+                  <span className="speaker">{activeSession.name}</span>
                   <span>{renderWithLinks(liveJob.partial)}</span>
                 </div>
               ) : null}

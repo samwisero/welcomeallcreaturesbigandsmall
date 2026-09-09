@@ -207,6 +207,7 @@ export default function Page() {
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState(""); // UI v4.2: shown next to your messages in plain-text mode
   const [emailErr, setEmailErr] = useState("");
   const [passErr, setPassErr] = useState("");
   const [banner, setBanner] = useState<{ kind: "error" | "success"; text: string } | null>(null);
@@ -268,6 +269,17 @@ export default function Page() {
         if (error) {
           setBanner({ kind: "error", text: error.message });
         } else {
+          // Save the friend's name to prefs right away (best effort — never blocks signup).
+          if (name.trim()) {
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              void fetch("/api/prefs", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "save", accessToken: session?.access_token, prefs: { displayName: name.trim() } }),
+              });
+            } catch { /* ignore */ }
+          }
           // No email confirmation step anymore — signup signs you in, and the
           // SIGNED_IN listener above forwards to /chat.
           setBanner({ kind: "success", text: "Account created — signing you in…" });
@@ -350,6 +362,26 @@ export default function Page() {
             />
             <div className={`field-hint${emailErr ? " error" : ""}`}>{emailErr}</div>
           </div>
+
+          {mode === "signup" && (
+            <div className="auth-field">
+              <label className="auth-label" htmlFor="name">
+                Your name
+              </label>
+              <input
+                id="name"
+                type="text"
+                autoComplete="nickname"
+                className="auth-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="What should the beings call you?"
+                maxLength={40}
+                disabled={loading}
+              />
+              <div className="field-hint"></div>
+            </div>
+          )}
 
           <div className="auth-field">
             <label className="auth-label" htmlFor="password">
