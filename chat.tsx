@@ -125,7 +125,7 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
     text: "You are a fun, joyful, and free spirited AI.",
   },
 ];
-// CSS lives in ../lib/chat-styles.ts (UI v4 2026-09-09: sky bar with red phoenix menu + red lion settings; mobile-first board).
+// CSS lives in ../lib/chat-styles.ts (UI v4.3 2026-09-09: sky bar, sky title, plain-text mode, full-screen-only wider chat column).
 
 // =====================================================================
 // Component

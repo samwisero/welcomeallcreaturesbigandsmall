@@ -368,4 +368,13 @@ body {
 @media (max-width: 480px) {
   .wood-chat-overlay { top: 4%; bottom: 3.5%; left: 12%; right: 12%; }
 }
+
+/* ===== UI v4.3 (2026-09-09): wider chat column only when the phone is truly full-screen ===== */
+/* (a) browser bars hidden → viewport is tall (aspect ≤ 1:2); (b) the site's own fullscreen toggle */
+@media (max-width: 768px) and (max-aspect-ratio: 1/2) {
+  .wood-chat-overlay { left: 7%; right: 7%; }
+}
+@media (max-width: 768px) {
+  :fullscreen .wood-chat-overlay, :-webkit-full-screen .wood-chat-overlay { left: 7%; right: 7%; }
+}
 `;
