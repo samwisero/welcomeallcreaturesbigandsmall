@@ -284,4 +284,41 @@ body {
 @keyframes phasePulse { 0%,100% { transform: scale(.7); opacity: .5; } 50% { transform: scale(1.15); opacity: 1; } }
 .shield-stop-btn { background: linear-gradient(135deg, #d4af37, #b8860b) !important; color: #2f2419 !important; }
 .shield-stop-btn:hover { filter: brightness(1.08); }
+
+/* ===== UI v4 (2026-09-09): sky bar — red phoenix (menu) + red lion (settings) ===== */
+:root { --sky-top: 63px; --sky-bottom: 40px; --creature: #B3261E; --creature-hot: #D63B2F; --forest: #3F7A4E; }
+.sky-bar { position: fixed; top: 0; left: 0; right: 0; height: var(--sky-top); z-index: 140; display: flex; align-items: center; justify-content: space-between; padding: env(safe-area-inset-top, 0) 10px 0; pointer-events: none; }
+.creature-btn { pointer-events: auto; width: 54px; height: 54px; border: none; background: transparent; cursor: pointer; display: grid; place-items: center; padding: 0; -webkit-tap-highlight-color: transparent; }
+.creature-glyph { display: block; width: 46px; height: 46px; background-color: var(--creature); -webkit-mask: url('/images/phoenix-mask.png') center / contain no-repeat; mask: url('/images/phoenix-mask.png') center / contain no-repeat; filter: drop-shadow(0 0 1.5px rgba(217, 164, 65, 0.95)) drop-shadow(0 2px 5px rgba(0, 0, 0, 0.55)); transition: transform 0.22s ease, background-color 0.2s ease; }
+.lion-btn .creature-glyph { -webkit-mask-image: url('/images/lion-mask.png'); mask-image: url('/images/lion-mask.png'); }
+.creature-btn:hover .creature-glyph, .creature-btn.open .creature-glyph { background-color: var(--creature-hot); transform: scale(1.1); }
+.phoenix-btn.open .creature-glyph { animation: wingFlare 0.45s ease; }
+@keyframes wingFlare { 0% { transform: scale(1); } 40% { transform: scale(1.22) rotate(-4deg); } 100% { transform: scale(1.1); } }
+.sky-backdrop { position: fixed; inset: 0; z-index: 139; background: transparent; }
+.sky-card { position: fixed; top: calc(var(--sky-top) - 6px); z-index: 145; background: rgba(20, 10, 5, 0.97); border: 1px solid rgba(184, 134, 11, 0.75); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(184, 134, 11, 0.15); animation: settingsScaleIn 0.18s ease; font-family: "Segoe UI", sans-serif; color: #f5f5dc; }
+.phoenix-menu { left: 8px; min-width: 200px; }
+.lion-popup { right: 8px; min-width: 210px; }
+.sky-card-title { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(245, 245, 220, 0.6); padding: 4px 10px 2px; }
+.phoenix-menu-item, .lion-popup .setting-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border-radius: 8px; background: rgba(255, 255, 255, 0.05); color: #f5f5dc; border: 1px solid transparent; font-size: 15px; line-height: 1.2; cursor: pointer; text-align: left; font-family: inherit; }
+.phoenix-menu-item:hover, .lion-popup .setting-btn:hover { background: rgba(63, 122, 78, 0.3); border-color: rgba(63, 122, 78, 0.7); }
+.phoenix-menu-item .mi-glyph { font-size: 17px; width: 22px; text-align: center; }
+/* the old left-edge tabs and the top-left settings banner are retired */
+.chats-toggle-btn, .system-toggle-btn, .settings-panel { display: none !important; }
+/* bigger, thumb-friendly chat rows */
+.list-item { padding: 12px 12px; font-size: 14px; gap: 8px; min-height: 48px; }
+.list-item.active-item { border-color: rgba(63, 122, 78, 0.9); background: rgba(63, 122, 78, 0.22); }
+.row-icon-btn { font-size: 17px; padding: 6px 7px; }
+.sidebar-drawer { z-index: 150; }
+.sidebar-header { font-size: 15px; padding: 14px 14px; }
+/* delete lives inside the per-chat settings popup now */
+.being-delete-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(176, 141, 87, 0.35); }
+.being-delete-btn { background: rgba(180, 50, 40, 0.18); color: #ffd6d2; border: 1px solid rgba(180, 50, 40, 0.5); border-radius: 8px; padding: 9px 12px; cursor: pointer; font-size: 13.5px; }
+.being-delete-btn:hover { background: rgba(180, 50, 40, 0.35); }
+/* mobile-first board: touches left/right, fills the space between the sky bands */
+@media (max-width: 768px) {
+  .content-container { top: var(--sky-top); height: calc(100dvh - var(--sky-top) - var(--sky-bottom)); }
+  .centered-box { width: 100vw; height: 100%; }
+  .save-pill { position: fixed; top: auto; right: auto; bottom: 12px; left: 12px; }
+  .indicator { bottom: 8px; padding: 6px 12px; }
+}
 `;

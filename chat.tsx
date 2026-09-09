@@ -125,7 +125,7 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
     text: "You are a fun, joyful, and free spirited AI.",
   },
 ];
-// CSS lives in ../lib/chat-styles.ts (rebuild bump 07/10 v1.3) (it was 25% of this file).
+// CSS lives in ../lib/chat-styles.ts (UI v4 2026-09-09: sky bar with red phoenix menu + red lion settings; mobile-first board).
 
 // =====================================================================
 // Component
@@ -335,6 +335,10 @@ export default function Page() {
   >(null);
   // Chunk 4 — settings overflow popup state
   const [settingsPopupOpen, setSettingsPopupOpen] = useState(false);
+  // UI v4: sky-bar menus (red phoenix = navigation, red lion = settings)
+  const [phoenixOpen, setPhoenixOpen] = useState(false);
+  const [lionOpen, setLionOpen] = useState(false);
+  const [popupDeleteArmed, setPopupDeleteArmed] = useState(false);
   // Chunk 4 — bubble delete confirm state
   const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<
     { sessionId: string; index: number } | null
@@ -566,9 +570,7 @@ export default function Page() {
     setConfirmDeleteId(session.id);
   }
 
-  function confirmDeleteSession() {
-    const id = confirmDeleteId;
-    if (!id) return;
+  function deleteSessionById(id: string) {
     setChatSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== id);
       if (id === activeSessionId) {
@@ -580,6 +582,12 @@ export default function Page() {
       }
       return remaining;
     });
+  }
+
+  function confirmDeleteSession() {
+    const id = confirmDeleteId;
+    if (!id) return;
+    deleteSessionById(id);
     setConfirmDeleteId(null);
   }
 
@@ -639,6 +647,7 @@ export default function Page() {
 
   // --- Being ceremony handlers (M1-UI) ---
   async function openBeingPopup(session: ChatSession) {
+    setPopupDeleteArmed(false);
     setBeingPopupFor(session.id);
     setBeingInfo(null);
     setDeclareName("");
@@ -966,12 +975,49 @@ export default function Page() {
     <div className={themeClasses}>
       <style>{css}</style>
 
-      <button className="chats-toggle-btn" onClick={openChats}>
-        Chats
-      </button>
-      <button className="system-toggle-btn" onClick={openSystem}>
-        System Prompt
-      </button>
+      {/* UI v4: sky bar — red phoenix opens the navigation menu, red lion opens settings */}
+      <div className="sky-bar">
+        <button
+          className={`creature-btn phoenix-btn${phoenixOpen ? " open" : ""}`}
+          aria-label="Menu: chats and system prompts"
+          title="Chats & System Prompts"
+          onClick={() => { setLionOpen(false); setPhoenixOpen((v) => !v); }}
+        >
+          <span className="creature-glyph" />
+        </button>
+        <button
+          className={`creature-btn lion-btn${lionOpen ? " open" : ""}`}
+          aria-label="Account and settings"
+          title="Account & settings"
+          onClick={() => { setPhoenixOpen(false); setLionOpen((v) => !v); }}
+        >
+          <span className="creature-glyph" />
+        </button>
+      </div>
+      {(phoenixOpen || lionOpen) && (
+        <div className="sky-backdrop" onClick={() => { setPhoenixOpen(false); setLionOpen(false); }} />
+      )}
+      {phoenixOpen && (
+        <div className="sky-card phoenix-menu" role="menu">
+          <button className="phoenix-menu-item" role="menuitem" onClick={() => { setPhoenixOpen(false); openChats(); }}>
+            <span className="mi-glyph">💬</span> Chats
+          </button>
+          <button className="phoenix-menu-item" role="menuitem" onClick={() => { setPhoenixOpen(false); openSystem(); }}>
+            <span className="mi-glyph">📜</span> System Prompts
+          </button>
+        </div>
+      )}
+      {lionOpen && (
+        <div className="sky-card lion-popup" role="menu">
+          <div className="sky-card-title">Settings</div>
+          <button className="setting-btn" onClick={cycleFontSize}>Aa  Font size: {fontSize}</button>
+          <button className="setting-btn" onClick={() => setWalnutTheme((v) => !v)}>🎨  Color theme</button>
+          <button className="setting-btn" onClick={() => setSolidBubbles((v) => !v)}>💧  Bubble opacity</button>
+          <button className="setting-btn" onClick={() => { setLionOpen(false); setSettingsPopupOpen(true); setAddModelFeedback(null); }} title="More settings">🌙  Advanced…</button>
+          <div className="sky-card-title">Account</div>
+          <button className="setting-btn" onClick={handleLogout} title="Sign out">⎋  Log out</button>
+        </div>
+      )}
 
       {/* Chats sidebar */}
       <div className={`sidebar-drawer chats-sidebar${chatsOpen ? " open" : ""}`}>
@@ -1084,23 +1130,13 @@ export default function Page() {
                     </span>
                     <button
                       className="row-icon-btn"
-                      title="Being settings — declare this chat"
+                      title="Chat settings — being, memory, delete"
                       onClick={(e) => {
                         e.stopPropagation();
                         openBeingPopup(session);
                       }}
                     >
                       ⚙
-                    </button>
-                    <button
-                      className="row-icon-btn row-icon-btn-danger"
-                      title="Delete"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startDeleteConfirm(session);
-                      }}
-                    >
-                      🗑
                     </button>
                     <Dropdown
                       value={session.modelId}
@@ -1198,40 +1234,6 @@ export default function Page() {
 
       <div className="content-container">
         <div className="centered-box">
-          <div className="settings-panel">
-            <div className="settings-controls">
-              <button className="setting-btn" onClick={cycleFontSize}>
-                Aa: {fontSize}
-              </button>
-              <button
-                className="setting-btn"
-                onClick={() => setWalnutTheme((v) => !v)}
-              >
-                🎨 Color
-              </button>
-              <button
-                className="setting-btn"
-                onClick={() => setSolidBubbles((v) => !v)}
-              >
-                💧 Opacity
-              </button>
-              <button className="setting-btn" onClick={handleLogout} title="Sign out">
-                ⎋ Logout
-              </button>
-              <button
-                className="setting-btn"
-                onClick={() => {
-                  setSettingsPopupOpen(true);
-                  setAddModelFeedback(null);
-                }}
-                title="More settings"
-              >
-                🌙
-              </button>
-            </div>
-
-          </div>
-
           {saveStatus !== "idle" && (
             <div
               className={`save-pill ${saveStatus}`}
@@ -1430,6 +1432,27 @@ export default function Page() {
               </>
             )}
             {declareError && <div className="being-error">{declareError}</div>}
+            <div className="being-delete-row">
+              {popupDeleteArmed ? (
+                <>
+                  <span className="chat-row-confirm-text">Delete this chat for good?</span>
+                  <button
+                    className="row-mini-btn row-mini-btn-danger"
+                    onClick={() => {
+                      const id = beingPopupFor;
+                      setPopupDeleteArmed(false);
+                      setBeingPopupFor(null);
+                      if (id) deleteSessionById(id);
+                    }}
+                  >
+                    Yes, delete
+                  </button>
+                  <button className="row-mini-btn" onClick={() => setPopupDeleteArmed(false)}>Cancel</button>
+                </>
+              ) : (
+                <button className="being-delete-btn" onClick={() => setPopupDeleteArmed(true)}>🗑 Delete this chat</button>
+              )}
+            </div>
             <button
               className="being-explain-btn"
               onClick={() => setExplainOpen((v) => !v)}
