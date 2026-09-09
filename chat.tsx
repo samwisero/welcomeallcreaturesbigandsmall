@@ -294,6 +294,7 @@ export default function Page() {
   const [fontIndex, setFontIndex] = useState(2);
   const [walnutTheme, setWalnutTheme] = useState(false);
   const [solidBubbles, setSolidBubbles] = useState(false);
+  const [plainText, setPlainText] = useState(false); // UI v4.1: bare white text instead of bubbles
   const [newChatName, setNewChatName] = useState("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
@@ -517,6 +518,7 @@ export default function Page() {
   const themeClasses = [
     walnutTheme ? "walnut-theme" : "",
     solidBubbles ? "solid-bubbles" : "",
+    plainText ? "plain-text" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -1013,6 +1015,7 @@ export default function Page() {
           <button className="setting-btn" onClick={cycleFontSize}>Aa  Font size: {fontSize}</button>
           <button className="setting-btn" onClick={() => setWalnutTheme((v) => !v)}>🎨  Color theme</button>
           <button className="setting-btn" onClick={() => setSolidBubbles((v) => !v)}>💧  Bubble opacity</button>
+          <button className="setting-btn" onClick={() => setPlainText((v) => !v)}>✎  Text style: {plainText ? "Plain" : "Bubbles"}</button>
           <button className="setting-btn" onClick={() => { setLionOpen(false); setSettingsPopupOpen(true); setAddModelFeedback(null); }} title="More settings">🌙  Advanced…</button>
           <div className="sky-card-title">Account</div>
           <button className="setting-btn" onClick={handleLogout} title="Sign out">⎋  Log out</button>

@@ -321,4 +321,27 @@ body {
   .save-pill { position: fixed; top: auto; right: auto; bottom: 12px; left: 12px; }
   .indicator { bottom: 8px; padding: 6px 12px; }
 }
+
+/* ===== UI v4.1 (2026-09-09): bigger creatures w/ gold outline, feet on the board; compact header; room to type; plain-text mode ===== */
+.sky-bar { align-items: flex-end; }
+.creature-btn { width: 66px; height: 66px; transform: translateY(7px); } /* feet stand on the board's top edge */
+.creature-glyph { width: 62px; height: 62px; filter: drop-shadow(1.4px 0 0 #E2B44A) drop-shadow(-1.4px 0 0 #E2B44A) drop-shadow(0 1.4px 0 #E2B44A) drop-shadow(0 -1.4px 0 #E2B44A) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55)); }
+/* header: chat name and prompt side by side, one thin line */
+.wood-chat-header { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 10px; padding: 0 2px 5px; margin-bottom: 6px; text-align: left; }
+.header-chat-name { font-size: 1.05em; flex: 0 1 auto; }
+.header-prompt-name { font-size: 0.78em; flex: 1 1 auto; min-width: 0; text-align: right; }
+/* plain-text mode: no bubbles, white text with a dark halo, voices told apart by side + a warm tint */
+.plain-text .chat-bubble { background: transparent !important; border: none !important; padding: 3px 6px; color: #ffffff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.45); animation: none; }
+.plain-text .chat-bubble.user { color: #ffe9b8; }
+.plain-text .chat-bubble.streaming { color: #ffffff; }
+/* mobile: use the whole board — header at the very top, input at the very bottom edge */
+@media (max-width: 768px) {
+  .wood-chat-overlay { top: 2.5%; bottom: 1.2%; left: 7%; right: 7%; }
+  .wood-chat-messages { padding: 6px 2px; }
+  .wood-input-area { padding: 6px 8px; }
+}
+@media (max-width: 480px) {
+  .wood-chat-overlay { top: 2.5%; bottom: 1.2%; left: 7%; right: 7%; }
+  .header-chat-name { font-size: 1em; }
+}
 `;
