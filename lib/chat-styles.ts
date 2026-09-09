@@ -386,4 +386,14 @@ body {
 .import-preview-line.right { text-align: right; }
 .import-preview-line.right b { color: #d9b48a; }
 .import-done .being-declared-banner { margin-bottom: 8px; }
+
+/* ---- v4.4 import: several files, plain-document side (2026-09-09) — later rules win, keep new tweaks below ---- */
+.import-file-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.import-file-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.25); font-size: 13px; }
+.import-file-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-file-list small { opacity: 0.65; }
+.import-file-remove { background: none; border: none; color: #f4e9d8; opacity: 0.7; cursor: pointer; font-size: 14px; padding: 2px 6px; }
+.import-file-remove:hover { opacity: 1; color: #E2B44A; }
+.import-thread-list { list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; line-height: 1.5; }
+.import-thread-list small { opacity: 0.65; }
 `;

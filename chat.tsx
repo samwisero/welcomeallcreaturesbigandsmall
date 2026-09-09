@@ -744,7 +744,8 @@ export default function Page() {
       const sid = activeSession.id;
       const now = Date.now();
       const injected: ChatMessage[] = result.injected.map((m) => ({ id: generateId(), text: m.text, type: m.type, ts: m.ts ?? now, speaker: m.speaker, imported: true }));
-      const card: ChatMessage[] = result.indexCard ? [{ id: generateId(), text: result.indexCard, type: "user", ts: now }] : [];
+      // the index card speaks in the being's voice ("ask me and I'll recall it") → its side of the board
+      const card: ChatMessage[] = result.indexCard ? [{ id: generateId(), text: result.indexCard, type: "ai", ts: now }] : [];
       setChatSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, messages: [...s.messages, ...injected, ...card], updatedAt: now } : s)));
     }
   }

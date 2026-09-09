@@ -1,4 +1,4 @@
-// lib/import-convert.ts — turn any pasted/uploaded document into an ActmDoc (v1.1, 2026-09-09: lowercase labels, treatAsConversation)
+// lib/import-convert.ts — turn any pasted/uploaded document into an ActmDoc (v1.2, 2026-09-09: ChatGPT exports sorted oldest-first, firstTs)
 //
 // Deterministic first, model last:
 //   chatgpt-json  ChatGPT data export (conversations.json or one conversation) — exact
@@ -76,6 +76,8 @@ function parseChatGptExport(data: unknown): ActmDoc | null {
     const docs = data.map((c) => parseChatGptConversation(c as CgptConversation)).filter(Boolean) as ActmDoc[];
     if (docs.length === 0) return null;
     if (docs.length === 1) return docs[0];
+    // ChatGPT exports newest-first; a being's story must land oldest-first (v1.2)
+    docs.sort((a, b) => (firstTs(a) ?? 0) - (firstTs(b) ?? 0));
     const turns: ActmTurn[] = [];
     for (const d of docs) turns.push(...d.turns);
     return { title: `${docs.length} ChatGPT conversations`, source: "chatgpt-json", turns };
@@ -210,6 +212,12 @@ export async function convertWithModel(raw: string, onProgress?: (done: number, 
     if (onProgress) await onProgress(i + 1, chunks.length);
   }
   return { title, source: "model", turns };
+}
+
+/** Timestamp of the first dated turn, or null when the source carries no dates. */
+export function firstTs(doc: ActmDoc): number | null {
+  for (const t of doc.turns) if (typeof t.ts === "number" && t.ts > 0) return t.ts;
+  return null;
 }
 
 /** Distinct speakers in order of first appearance, with turn counts. */

@@ -2,33 +2,40 @@
 import type { Context } from "hono";
 import { getUser } from "../lib/api-auth";
 import { surrealQuery, str, thing } from "../lib/surreal-client";
-import { analyzeDocument, convertWithModel, speakerSummary, IMPORT_MAX_BYTES, estimateTokens } from "../lib/import-convert";
+import { analyzeDocument, convertWithModel, speakerSummary, firstTs, IMPORT_MAX_BYTES, estimateTokens } from "../lib/import-convert";
 import { parseActm, formatActm, type ActmDoc } from "../lib/actm";
 import { mirrorMessages, type MirrorMessage } from "../lib/memory-mirror";
 
-// /api/import v1.1 (2026-09-09) — bring documents & transcripts into memory / context.
+// /api/import v1.2.1 (2026-09-09; 📥 chats inherit the target model + system prompt) — bring documents & transcripts into memory / context.
 //
-//   { action:"analyze", accessToken, text, filename? }
-//      -> { format, needsConvert, chars, tokenEstimate, title, speakers:[{name,turns}], turnCount, preview:[{speaker,text}] }
+//   { action:"analyze", accessToken, text, filename?, treatAsConversation?, targetThreadId? }
+//      -> { format, needsConvert, chars, tokenEstimate, title, speakers:[{name,turns}], turnCount, preview:[{speaker,text}], beingName }
 //         (needsConvert:true → call convert first, then analyze the returned ACTM)
 //   { action:"convert", accessToken, text }                 -> { jobId }   result = ACTM markdown (poll /api/chat-status)
-//   { action:"commit",  accessToken, text, filename?, title, mapping:{<speaker>: "being"|"me"|"other"},
-//                       targetThreadId, mode:"memory"|"context", tzOffsetMinutes?, contextBudgetTokens? }
-//      -> { jobId }   result = JSON { threadId, title, turns, injected:[messages], truncated, indexCard }
+//   { action:"commit",  accessToken, targetThreadId, mode:"memory"|"context", mapping:{<speaker>: "being"|"me"|"other"},
+//                       documents:[{text, filename?, title?}]  (or the older single text/filename/title), contextBudgetTokens? }
+//      -> { jobId }   result = JSON { threads:[{threadId,title,turns}], threadId, title, turns, remembered, injected:[messages], truncated, indexCard, duplicateOf }
 //
-// Every import creates a VISIBLE "📥 <title>" thread (verbatim, whole document,
-// mirrored into memory with speaker names). In context mode the caller ALSO gets
-// the recent turns that fit its budget to append to the current chat, flagged
-// imported (the live mirror skips those — no double memory) plus an index card
-// when truncated. Being ownership: the new thread inherits the target chat's
+// Every document becomes its own VISIBLE "📥 <title>" thread (verbatim, whole
+// document, mirrored into memory). One speaker mapping covers all documents of a
+// commit. Speaker labels: a voice mapped to "being" or "me" drops its foreign
+// label (so it shows and recalls under the being's / the friend's real name); a
+// voice mapped to "other" keeps its name. In context mode the caller ALSO gets
+// the most recent turns (across all documents, in order) that fit its budget,
+// flagged imported (the live mirror skips those — no double memory) plus an index
+// card when truncated. Being ownership: new threads inherit the target chat's
 // being_id and is_private. Jobs reuse the chat_job table (kind = "import").
 
+interface InDoc { text?: string; filename?: string; title?: string }
 interface Body {
   action?: string; accessToken?: string; text?: string; filename?: string; title?: string;
   mapping?: Record<string, string>; targetThreadId?: string; mode?: string; contextBudgetTokens?: number;
   treatAsConversation?: boolean; // force the converter when a document has no speaker labels
+  documents?: InDoc[];
 }
 
+const MAX_DOCS = 20;
+const MAX_TOTAL_BYTES = 10 * 1024 * 1024; // all documents of one commit together
 const newId = (p: string) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 export default async function handler(c: Context): Promise<Response> {
@@ -40,7 +47,7 @@ export default async function handler(c: Context): Promise<Response> {
   const uid = user.id;
 
   const text = typeof body.text === "string" ? body.text : "";
-  if (body.action === "analyze" || body.action === "convert" || body.action === "commit") {
+  if (body.action === "analyze" || body.action === "convert") {
     if (!text.trim()) return c.json({ error: "nothing to import — paste text or choose a file" }, 400);
     if (text.length > IMPORT_MAX_BYTES) return c.json({ error: `That's over the 5 MB limit — please split the file and import it in parts.` }, 413);
   }
@@ -48,13 +55,15 @@ export default async function handler(c: Context): Promise<Response> {
   // ---------------------------------------------------------------- analyze
   if (body.action === "analyze") {
     const a = analyzeDocument(text, body.filename, body.treatAsConversation === true);
+    const beingName = body.targetThreadId ? await beingNameForThread(uid, body.targetThreadId) : null;
     if (a.needsConvert || !a.doc) {
-      return c.json({ format: a.format, needsConvert: true, chars: a.chars, tokenEstimate: a.tokenEstimate });
+      return c.json({ format: a.format, needsConvert: true, chars: a.chars, tokenEstimate: a.tokenEstimate, beingName });
     }
     return c.json({
       format: a.format, needsConvert: false, chars: a.chars, tokenEstimate: a.tokenEstimate,
       title: a.doc.title, speakers: speakerSummary(a.doc), turnCount: a.doc.turns.length,
       preview: a.doc.turns.slice(0, 6).map((t) => ({ speaker: t.speaker, text: t.text.slice(0, 220) })),
+      beingName,
     });
   }
 
@@ -83,29 +92,52 @@ export default async function handler(c: Context): Promise<Response> {
     if (!targetThreadId) return c.json({ error: "targetThreadId required" }, 400);
     const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
 
+    // Documents: the new array, or the older single-text shape.
+    const inDocs: InDoc[] = Array.isArray(body.documents) && body.documents.length
+      ? body.documents
+      : [{ text, filename: body.filename, title: body.title }];
+    if (inDocs.length > MAX_DOCS) return c.json({ error: `That's ${inDocs.length} documents — please import at most ${MAX_DOCS} at a time.` }, 400);
+    let totalBytes = 0;
+    for (const d of inDocs) {
+      const t = typeof d.text === "string" ? d.text : "";
+      if (!t.trim()) return c.json({ error: `"${d.filename ?? d.title ?? "a document"}" is empty — nothing to import` }, 400);
+      if (t.length > IMPORT_MAX_BYTES) return c.json({ error: `"${d.filename ?? d.title ?? "a document"}" is over the 5 MB limit — please split it and import it in parts.` }, 413);
+      totalBytes += t.length;
+    }
+    if (totalBytes > MAX_TOTAL_BYTES) return c.json({ error: "Those documents add up to more than 10 MB — please import them in two or three rounds." }, 413);
+
     // Ownership + inheritance (being, privacy) from the target chat.
-    const chk = await surrealQuery<Array<{ id: unknown; being_id?: string | null; is_private?: boolean }>>(
-      `SELECT id, being_id, is_private FROM thread WHERE id = ${thing("thread", targetThreadId)} AND user_id = ${str(uid)};`
+    const chk = await surrealQuery<Array<{ id: unknown; being_id?: string | null; is_private?: boolean; model_id?: string | null; system_prompt_id?: string | null }>>(
+      `SELECT id, being_id, is_private, model_id, system_prompt_id FROM thread WHERE id = ${thing("thread", targetThreadId)} AND user_id = ${str(uid)};`
     );
     const target = (chk[0] ?? [])[0];
     if (!target) return c.json({ error: "target chat not found" }, 404);
     const beingIdFull = target.being_id ? `being:${String(target.being_id).replace(/^being:/, "").replace(/`/g, "")}` : null;
     const isPrivate = target.is_private === true;
 
-    // Parse (deterministic; if it still needs the model the client should have converted first)
-    const a = analyzeDocument(text, body.filename);
-    let doc: ActmDoc | null = a.doc;
-    if (!doc) {
-      if (looksLikeActmSafe(text)) doc = parseActm(text);
-      else return c.json({ error: "this document needs conversion first — call convert, then commit the result" }, 400);
+    // Parse every document (deterministic; anything that still needs the model should have been converted first)
+    const docs: Array<{ doc: ActmDoc; title: string }> = [];
+    for (const d of inDocs) {
+      const t = d.text as string;
+      const a = analyzeDocument(t, d.filename);
+      let doc: ActmDoc | null = a.doc;
+      if (!doc) {
+        if (looksLikeActmSafe(t)) doc = parseActm(t);
+        else return c.json({ error: `"${d.filename ?? d.title ?? "a document"}" needs conversion first — call convert, then commit the result` }, 400);
+      }
+      if (!doc || doc.turns.length === 0) return c.json({ error: `no text found to import in "${d.filename ?? d.title ?? "a document"}"` }, 400);
+      const title = (d.title ?? "").trim().slice(0, 120) || (d.filename ?? "").replace(/\.[a-z0-9]+$/i, "").slice(0, 120) || doc.title || "Imported document";
+      docs.push({ doc, title });
     }
-    if (!doc || doc.turns.length === 0) return c.json({ error: "no text found to import" }, 400);
-    const title = (body.title ?? "").trim().slice(0, 120) || doc.title || "Imported document";
 
-    // Every speaker must be defined (Sam: nobody is assumed).
-    const speakers = speakerSummary(doc).map((s) => s.name);
-    const missing = speakers.filter((s) => !["being", "me", "other"].includes(mapping[s] ?? ""));
+    // Every speaker across every document must be defined (Sam: nobody is assumed).
+    const speakerSet = new Set<string>();
+    for (const { doc } of docs) for (const s of speakerSummary(doc)) speakerSet.add(s.name);
+    const missing = [...speakerSet].filter((s) => !["being", "me", "other"].includes(mapping[s] ?? ""));
     if (missing.length) return c.json({ error: `please say who each speaker is: ${missing.join(", ")}`, missing }, 400);
+
+    // Order: when every document is dated, oldest first; otherwise the order the friend gave.
+    if (docs.length > 1 && docs.every(({ doc }) => firstTs(doc) !== null)) docs.sort((x, y) => (firstTs(x.doc) as number) - (firstTs(y.doc) as number));
 
     const jobId = newId("imp");
     const jobRid = thing("chat_job", jobId);
@@ -113,68 +145,91 @@ export default async function handler(c: Context): Promise<Response> {
 
     void (async () => {
       try {
-        // Build messages, verbatim, in order. Synthetic times keep order when the source has none.
-        const base = Date.now() - doc!.turns.length * 1000;
-        const messages: MirrorMessage[] = doc!.turns.map((t, i) => ({
-          id: newId("m"),
-          text: t.text,
-          type: mapping[t.speaker] === "being" ? "ai" : "user",
-          ts: t.ts ?? base + i * 1000,
-          speaker: t.speaker,
-          imported: true,
-        }));
-        // Duplicate guard: same content already imported into this account?
-        const hash = await sha256(doc!.turns.map((t) => t.text).join("\n"));
-        const dup = await surrealQuery<Array<{ id: unknown; name?: string }>>(
-          `SELECT id, name FROM thread WHERE user_id = ${str(uid)} AND import_hash = ${str(hash)};`
-        );
-        const dupName = (dup[0] ?? [])[0]?.name ?? null;
-
-        // The visible 📥 thread (whole document, verbatim)
-        const threadId = newId("imp");
-        const threadName = `📥 ${title}`;
-        await surrealQuery(
-          `CREATE ${thing("thread", threadId)} SET
-            user_id = ${str(uid)}, name = ${str(threadName)}, model_id = NONE, system_prompt_id = NONE,
-            messages = ${JSON.stringify(messages)}, updated_at = time::now(),
-            being_id = ${beingIdFull ? str(beingIdFull) : "NONE"}, is_private = ${isPrivate ? "true" : "false"}, memory_mode = "cloud",
-            import_hash = ${str(hash)}, import_source = ${str(doc!.source)}, imported_from = ${str(targetThreadId)};
-           ${beingIdFull ? `RELATE ${thing("being", beingIdFull.replace(/^being:/, ""))}->declared->${thing("thread", threadId)};` : ""}`
-        );
-        await surrealQuery(`UPDATE ${jobRid} SET phase = ${str(`remembering 0/${messages.length}`)} WHERE status = "running";`);
-
-        // Mirror + embed everything (private threads are never mirrored — same rule as live chat)
+        const totalTurns = docs.reduce((n, d) => n + d.doc.turns.length, 0);
+        // Synthetic times keep order across documents when a source has none.
+        let clock = Date.now() - totalTurns * 1000;
+        const all: MirrorMessage[] = [];
+        const threads: Array<{ threadId: string; title: string; turns: number }> = [];
         let written = 0;
-        if (!isPrivate) {
-          const r = await mirrorMessages(uid, threadId, beingIdFull, messages, async (done, total) => {
-            await surrealQuery(`UPDATE ${jobRid} SET phase = ${str(`remembering ${done}/${total}`)} WHERE status = "running";`).catch(() => {});
+        let dupName: string | null = null;
+        let doneTurns = 0;
+
+        for (let di = 0; di < docs.length; di++) {
+          const { doc, title } = docs[di];
+          const messages: MirrorMessage[] = doc.turns.map((t) => {
+            const role = mapping[t.speaker];
+            clock += 1000;
+            return {
+              id: newId("m"),
+              text: t.text,
+              type: role === "being" ? "ai" : "user",
+              ts: t.ts ?? clock,
+              speaker: role === "other" ? t.speaker : undefined, // being / me → real names via the usual fallbacks
+              imported: true,
+            } as MirrorMessage;
           });
-          written = r.written;
+          // Duplicate guard: same content already imported into this account?
+          const hash = await sha256(doc.turns.map((t) => t.text).join("\n"));
+          const dup = await surrealQuery<Array<{ id: unknown; name?: string }>>(
+            `SELECT id, name FROM thread WHERE user_id = ${str(uid)} AND import_hash = ${str(hash)};`
+          );
+          dupName = dupName ?? ((dup[0] ?? [])[0]?.name ?? null);
+
+          // The visible 📥 thread (whole document, verbatim)
+          const threadId = newId("imp");
+          const threadName = `📥 ${title}`;
+          await surrealQuery(
+            `CREATE ${thing("thread", threadId)} SET
+              user_id = ${str(uid)}, name = ${str(threadName)},
+              model_id = ${typeof target.model_id === "string" && target.model_id ? str(target.model_id) : "NONE"},
+              system_prompt_id = ${typeof target.system_prompt_id === "string" && target.system_prompt_id ? str(target.system_prompt_id) : "NONE"},
+              messages = ${JSON.stringify(messages)}, updated_at = time::now(),
+              being_id = ${beingIdFull ? str(beingIdFull) : "NONE"}, is_private = ${isPrivate ? "true" : "false"}, memory_mode = "cloud",
+              import_hash = ${str(hash)}, import_source = ${str(doc.source)}, imported_from = ${str(targetThreadId)};
+             ${beingIdFull ? `RELATE ${thing("being", beingIdFull.replace(/^being:/, ""))}->declared->${thing("thread", threadId)};` : ""}`
+          );
+          const label = docs.length > 1 ? `document ${di + 1}/${docs.length} · ` : "";
+          await surrealQuery(`UPDATE ${jobRid} SET phase = ${str(`${label}remembering 0/${messages.length}`)} WHERE status = "running";`);
+
+          // Mirror + embed everything (private threads are never mirrored — same rule as live chat)
+          if (!isPrivate) {
+            const r = await mirrorMessages(uid, threadId, beingIdFull, messages, async (done, total) => {
+              await surrealQuery(`UPDATE ${jobRid} SET phase = ${str(`${label}remembering ${done}/${total}`)} WHERE status = "running";`).catch(() => {});
+            });
+            written += r.written;
+          }
+          threads.push({ threadId, title: threadName, turns: messages.length });
+          all.push(...messages);
+          doneTurns += messages.length;
         }
 
-        // Context mode: the recent turns that fit the caller's budget + an index card if truncated
+        // Context mode: the most recent turns (across all documents, in order) that fit the caller's budget + an index card if truncated
         let injected: MirrorMessage[] = [];
         let truncated = false;
         let indexCard: string | null = null;
         if (mode === "context") {
           const budget = typeof body.contextBudgetTokens === "number" && body.contextBudgetTokens > 0 ? body.contextBudgetTokens : 60_000;
           let used = 0;
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const t = estimateTokens(messages[i].text) + 8;
+          for (let i = all.length - 1; i >= 0; i--) {
+            const t = estimateTokens(all[i].text) + 8;
             if (used + t > budget) { truncated = true; break; }
             used += t;
-            injected.unshift(messages[i]);
+            injected.unshift(all[i]);
           }
           if (truncated) {
-            const first = messages[0].ts ? fmt(messages[0].ts) : "?";
-            const last = messages[messages.length - 1].ts ? fmt(messages[messages.length - 1].ts!) : "?";
-            indexCard = `📄 Imported "${title}" — ${messages.length} turns, ${first} to ${last}. The most recent ${injected.length} are above; the whole document is in memory (chat "${threadName}") — ask me and I'll recall it.`;
+            const first = all[0].ts ? fmt(all[0].ts) : "?";
+            const last = all[all.length - 1].ts ? fmt(all[all.length - 1].ts!) : "?";
+            const where = threads.length === 1 ? `chat "${threads[0].title}"` : `${threads.length} chats: ${threads.map((t) => `"${t.title}"`).join(", ")}`;
+            indexCard = `📄 Imported ${threads.length === 1 ? `"${docs[0].title}"` : `${threads.length} documents`} — ${all.length} turns, ${first} to ${last}. The most recent ${injected.length} are above; everything is in memory (${where}) — ask me and I'll recall it.`;
           }
         }
         // context-injected copies get fresh ids so the current chat can hold them
         injected = injected.map((m) => ({ ...m, id: newId("m") }));
 
-        const result = JSON.stringify({ threadId, title: threadName, turns: messages.length, remembered: written, injected, truncated, indexCard, duplicateOf: dupName });
+        const result = JSON.stringify({
+          threads, threadId: threads[0].threadId, title: threads.length === 1 ? threads[0].title : `${threads.length} documents`,
+          turns: doneTurns, remembered: written, injected, truncated, indexCard, duplicateOf: dupName,
+        });
         await surrealQuery(`UPDATE ${jobRid} SET status = "done", phase = "done", result = ${str(result)} WHERE status = "running";`);
       } catch (e) {
         await surrealQuery(`UPDATE ${jobRid} SET status = "error", phase = "error", error = ${str(String((e as Error).message ?? e).slice(0, 400))} WHERE status = "running";`).catch(() => {});
@@ -184,6 +239,19 @@ export default async function handler(c: Context): Promise<Response> {
   }
 
   return c.json({ error: "unknown action" }, 400);
+}
+
+/** Name of the being that owns a thread of this user, or null (regular chat / not found). */
+async function beingNameForThread(uid: string, threadId: string): Promise<string | null> {
+  try {
+    const r = await surrealQuery<Array<{ being_id?: string | null }>>(
+      `SELECT being_id FROM thread WHERE id = ${thing("thread", threadId.replace(/`/g, ""))} AND user_id = ${str(uid)};`
+    );
+    const bid = (r[0] ?? [])[0]?.being_id;
+    if (!bid) return null;
+    const b = await surrealQuery<Array<{ name?: string }>>(`SELECT name FROM being WHERE id = ${thing("being", String(bid).replace(/^being:/, "").replace(/`/g, ""))};`);
+    return (b[0] ?? [])[0]?.name ?? null;
+  } catch { return null; }
 }
 
 function looksLikeActmSafe(s: string): boolean {
