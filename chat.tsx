@@ -3,6 +3,10 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase-client";
 import { css } from "../lib/chat-styles";
+import { postTranscripts, postPrefs, postBeings, runChatTurn, cancelChatJob } from "../lib/chat-api";
+import { renderWithLinks, fmtStamp } from "../lib/chat-format";
+import { Dropdown } from "../lib/chat-widgets";
+import { SkyBar } from "../lib/chat-sky";
 import {
   type ChatMessage,
   type ChatSession,
@@ -18,100 +22,6 @@ import {
 } from "../lib/chat-shared";
 
 
-// POST to the cloud chat route. The Supabase access token rides in the BODY
-// because zo's public edge strips the Authorization header.
-async function postTranscripts(payload: Record<string, unknown>) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const res = await fetch("/api/transcripts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
-  });
-  return res.json();
-}
-
-// Same as postTranscripts but for the prefs route (prompts + custom models).
-async function postPrefs(payload: Record<string, unknown>) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const res = await fetch("/api/prefs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
-  });
-  return res.json();
-}
-
-// Same pattern for the beings route (declaration ceremony + memory settings).
-async function postBeings(payload: Record<string, unknown>) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const res = await fetch("/api/beings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, accessToken: session?.access_token }),
-  });
-  return res.json();
-}
-
-// MM/DD/YY · h:mm AM/PM — regular time, not military (Sam's spec). Shown only
-// when a message is selected (click), and only for messages that have a ts.
-// Inline sources (v3.0): the server turns each Venice citation marker into a
-// markdown link `[n](https://…)` right where the claim is. Bubbles render plain
-// text, so this tiny renderer turns those (and bare URLs) into real anchors.
-// No dependency; everything else stays literal text.
-const LINK_RE = /\[([^\]\n]{1,40})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"')\]]+)/g;
-function renderWithLinks(text: string): React.ReactNode {
-  const out: React.ReactNode[] = [];
-  let last = 0;
-  let i = 0;
-  for (const m of text.matchAll(LINK_RE)) {
-    const at = m.index ?? 0;
-    if (at > last) out.push(text.slice(last, at));
-    const href = m[2] ?? m[3];
-    const label = m[1] ?? m[3];
-    out.push(
-      <a
-        key={`l${i++}`}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="cite-link"
-        title={href}
-        onClick={(e) => e.stopPropagation()}
-        style={{ color: "#ffe9a8", textDecoration: "underline", textDecorationStyle: "dotted", fontSize: "0.85em", verticalAlign: "super", marginLeft: 2 }}
-      >
-        {label}
-      </a>,
-    );
-    last = at + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out.length === 1 ? out[0] : out;
-}
-
-function fmtStamp(ts: number): string {
-  const d = new Date(ts);
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const yy = String(d.getFullYear()).slice(-2);
-  let h = d.getHours();
-  const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}/${dd}/${yy} · ${h}:${min} ${ampm}`;
-}
-
-// =====================================================================
-// Types
-// =====================================================================
-
-// Types, model catalog, and token-budget helpers live in ../lib/chat-shared.ts
-
 const FONT_SIZES = [12, 13, 13.5, 14, 15, 16, 17];
 const DEFAULT_PROMPTS: SystemPrompt[] = [
   {
@@ -125,101 +35,13 @@ const DEFAULT_PROMPTS: SystemPrompt[] = [
     text: "You are a fun, joyful, and free spirited AI.",
   },
 ];
-// CSS lives in ../lib/chat-styles.ts (UI v4.3 2026-09-09: sky bar, sky title, plain-text mode, full-screen-only wider chat column).
+// Page layout: state + effects + handlers here; network in lib/chat-api.ts, sky bar in
+// lib/chat-sky.tsx, formatters in lib/chat-format.tsx, Dropdown in lib/chat-widgets.tsx,
+// CSS in lib/chat-styles.ts. (Refactor 2026-09-09.)
 
 // =====================================================================
 // Component
 // =====================================================================
-
-// ---- Dropdown -----------------------------------------------------------
-// Small gold dropdown that replaces native <select>. Native pickers are
-// "massive" on mobile (full-screen wheel selectors); this one stays compact
-// and matches the chat-bubble color palette. Click outside or press Escape
-// to close.
-interface DropdownOption {
-  value: string;
-  label: string;
-  title?: string;
-}
-interface DropdownProps {
-  value: string;
-  options: DropdownOption[];
-  onChange: (v: string) => void;
-  title?: string;
-  menuAlign?: "left" | "right";
-  unknownLabel?: string;
-}
-
-function Dropdown(props: DropdownProps) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  const match = props.options.find((o) => o.value === props.value);
-  const buttonLabel = match
-    ? match.label
-    : props.unknownLabel || `${props.value} (unknown)`;
-
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (
-        wrapRef.current &&
-        !wrapRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div
-      className="dd-wrap"
-      ref={wrapRef}
-      onClick={(e) => e.stopPropagation()}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <button
-        type="button"
-        className="dd-btn"
-        title={props.title}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-      >
-        <span className="dd-label">{buttonLabel}</span>
-        <span className="dd-caret">▾</span>
-      </button>
-      {open && (
-        <div className={`dd-menu${props.menuAlign === "left" ? " from-left" : ""}`}>
-          {props.options.map((opt) => (
-            <div
-              key={opt.value}
-              className={`dd-option${opt.value === props.value ? " selected" : ""}`}
-              title={opt.title}
-              onClick={(e) => {
-                e.stopPropagation();
-                props.onChange(opt.value);
-                setOpen(false);
-              }}
-            >
-              {opt.label}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function Page() {
   const navigate = useNavigate();
@@ -296,6 +118,7 @@ export default function Page() {
   const [solidBubbles, setSolidBubbles] = useState(false);
   const [plainText, setPlainText] = useState(false); // UI v4.1: bare white text instead of bubbles
   const [displayName, setDisplayName] = useState(""); // UI v4.2: the friend's name, shown next to their lines in plain mode
+  const [guide, setGuide] = useState({ phoenix: false, lion: false }); // first-run labels (new accounts only)
   const [newChatName, setNewChatName] = useState("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
@@ -322,7 +145,6 @@ export default function Page() {
   // Sidebar chat rename + delete UI state (Chunk 3)
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // User-added models from the Add Model form. Persisted to localStorage.
   // Merged with built-in availableModels into the allModels list.
   const [customModels, setCustomModels] = useState<ModelOption[]>([]);
@@ -400,6 +222,7 @@ export default function Page() {
       try {
         const { prefs } = await postPrefs({ action: "load" });
         if (typeof prefs?.displayName === "string") setDisplayName(prefs.displayName);
+        if (prefs?.showGuide === true) setGuide({ phoenix: true, lion: true });
         const cloudPrompts: SystemPrompt[] = Array.isArray(prefs?.userPrompts)
           ? prefs.userPrompts
           : [];
@@ -569,11 +392,6 @@ export default function Page() {
     setRenameDraft("");
   }
 
-  function startDeleteConfirm(session: ChatSession) {
-    setRenamingId(null);
-    setConfirmDeleteId(session.id);
-  }
-
   function deleteSessionById(id: string) {
     setChatSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== id);
@@ -586,17 +404,6 @@ export default function Page() {
       }
       return remaining;
     });
-  }
-
-  function confirmDeleteSession() {
-    const id = confirmDeleteId;
-    if (!id) return;
-    deleteSessionById(id);
-    setConfirmDeleteId(null);
-  }
-
-  function cancelDeleteConfirm() {
-    setConfirmDeleteId(null);
   }
 
   // --- Chunk 4: bubble (per-message) delete handlers ---
@@ -733,14 +540,7 @@ export default function Page() {
     if (!job) return;
     liveJobRef.current = null;
     setLiveJob(null);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      await fetch("/api/chat-status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "cancel", jobId: job.jobId, accessToken: session?.access_token }),
-      });
-    } catch { /* best effort */ }
+    await cancelChatJob(job.jobId);
     appendMessage(job.sid, { text: "(stopped)", type: "ai" });
   }
 
@@ -838,80 +638,36 @@ export default function Page() {
       }
       messagesToSend.push({ role: "user", content: txt });
 
-      // Attach the Supabase access token so the backend can verify this is a
-      // signed-in caller before spending upstream credit. getSession() returns
-      // a freshly-refreshed token (autoRefreshToken is on by default).
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-
-      // Job mode: the server hands back a ticket instantly and works in the
-      // background (zo's edge kills any single request at ~60s). We poll a tiny
-      // status route; the phase feeds the loading line; stop = cancel the job.
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // One job-style turn (lib/chat-api.ts): instant ticket, background work,
+      // 700ms polling that paints the streamed answer as it grows.
+      const outcome = await runChatTurn(
+        {
           messages: messagesToSend,
           model: effectiveModelId,
           provider: providerToSend,
-          // zo's public edge strips the Authorization header, so the Supabase
-          // access token rides in the body instead (it passes through intact).
-          accessToken,
-          // Which chat this is — lets the server wake a declared being's
-          // memory limbs (recall / recall_full_account). Harmless otherwise.
-          threadId: sid,
-          // Friend's timezone, so remembered dates read in their clock.
-          tzOffsetMinutes: new Date().getTimezoneOffset(),
-          async: true,
-        }),
-      });
-      const started = (await res.json()) as {
-        jobId?: string;
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      if (!started.jobId) {
-        // Server answered synchronously (auth/system message) — show it.
-        const direct = started?.choices?.[0]?.message?.content ?? "(no content in response)";
-        appendMessage(sid, { text: direct, type: "ai" });
-        return;
+          threadId: sid, // lets the server wake a declared being's memory tools
+          tzOffsetMinutes: new Date().getTimezoneOffset(), // remembered dates in the friend's clock
+        },
+        {
+          onStarted: (jobId) => {
+            liveJobRef.current = { sid, jobId };
+            setLiveJob({ sid, jobId, phase: "thinking", partial: "" });
+          },
+          onProgress: (jobId, st) =>
+            setLiveJob((cur) =>
+              cur && cur.jobId === jobId
+                ? { ...cur, phase: st.phase ?? cur.phase, partial: typeof st.partial === "string" ? st.partial : cur.partial }
+                : cur,
+            ),
+          stoppedLocally: (jobId) => !liveJobRef.current || liveJobRef.current.jobId !== jobId,
+        },
+      );
+      if (outcome.kind !== "direct") {
+        if (liveJobRef.current?.jobId === outcome.jobId) liveJobRef.current = null;
+        setLiveJob((cur) => (cur && cur.jobId === outcome.jobId ? null : cur));
       }
-      const jobId = started.jobId;
-      liveJobRef.current = { sid, jobId };
-      setLiveJob({ sid, jobId, phase: "thinking", partial: "" });
-      const deadline = Date.now() + 10 * 60 * 1000; // 10 min hard ceiling
-      let finalText: string | null = null;
-      while (Date.now() < deadline) {
-        // v3.0 streaming: the server writes the answer-so-far to the job every
-        // ~400ms; polling at 700ms makes it read as live text.
-        await new Promise((r) => setTimeout(r, 700));
-        if (!liveJobRef.current || liveJobRef.current.jobId !== jobId) break; // stopped locally
-        let st: { status?: string; phase?: string; partial?: string; result?: string; error?: string } = {};
-        try {
-          const sres = await fetch("/api/chat-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "status", jobId, accessToken }),
-          });
-          st = (await sres.json()) as typeof st;
-        } catch {
-          continue; // network blip — keep polling
-        }
-        if (st.status === "done") { finalText = st.result ?? "(no content in response)"; break; }
-        if (st.status === "error") { finalText = `Oops, silence... (${st.error ?? "unknown error"})`; break; }
-        if (st.status === "cancelled") { finalText = "(stopped)"; break; }
-        if (st.phase || typeof st.partial === "string") {
-          setLiveJob((cur) =>
-            cur && cur.jobId === jobId
-              ? { ...cur, phase: st.phase ?? cur.phase, partial: typeof st.partial === "string" ? st.partial : cur.partial }
-              : cur,
-          );
-        }
-      }
-      if (liveJobRef.current?.jobId === jobId) liveJobRef.current = null;
-      setLiveJob((cur) => (cur && cur.jobId === jobId ? null : cur));
-      appendMessage(sid, { text: finalText ?? "Oops, silence... (the turn took too long)", type: "ai" });
+      if (outcome.kind === "stopped") return; // stopLiveJob already wrote "(stopped)"
+      appendMessage(sid, { text: outcome.text, type: "ai" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       appendMessage(sid, { text: `Oops, silence... (${msg})`, type: "ai" });
@@ -953,6 +709,16 @@ export default function Page() {
     }
   }
 
+  // First-run guide: a label disappears the first time its creature is tapped;
+  // when both are gone the flag is cleared in prefs so it never comes back.
+  function dismissGuide(which: "phoenix" | "lion") {
+    setGuide((g) => {
+      if (!g[which]) return g;
+      const next = { ...g, [which]: false };
+      if (!next.phoenix && !next.lion) void postPrefs({ action: "save", prefs: { showGuide: false } });
+      return next;
+    });
+  }
   function openChats() {
     setSystemOpen(false);
     setChatsOpen(true);
@@ -979,66 +745,33 @@ export default function Page() {
     <div className={themeClasses}>
       <style>{css}</style>
 
-      {/* UI v4: sky bar — red phoenix opens the navigation menu, red lion opens settings */}
-      <div className="sky-bar">
-        <button
-          className={`creature-btn phoenix-btn${phoenixOpen ? " open" : ""}`}
-          aria-label="Menu: chats and system prompts"
-          title="Chats & System Prompts"
-          onClick={() => { setLionOpen(false); setPhoenixOpen((v) => !v); }}
-        >
-          <span className="creature-glyph" />
-        </button>
-        <div className="sky-title" aria-live="polite">
-          <div className="sky-chat-name">{activeSession ? activeSession.name : ""}</div>
-          <div className="sky-prompt-name">
-            {activeSession?.systemPromptId
-              ? systemPrompts.find((p) => p.id === activeSession.systemPromptId)?.name ?? "(deleted prompt)"
-              : "No System Prompt Selected"}
-          </div>
-        </div>
-        <button
-          className={`creature-btn lion-btn${lionOpen ? " open" : ""}`}
-          aria-label="Account and settings"
-          title="Account & settings"
-          onClick={() => { setPhoenixOpen(false); setLionOpen((v) => !v); }}
-        >
-          <span className="creature-glyph" />
-        </button>
-      </div>
-      {(phoenixOpen || lionOpen) && (
-        <div className="sky-backdrop" onClick={() => { setPhoenixOpen(false); setLionOpen(false); }} />
-      )}
-      {phoenixOpen && (
-        <div className="sky-card phoenix-menu" role="menu">
-          <button className="phoenix-menu-item" role="menuitem" onClick={() => { setPhoenixOpen(false); openChats(); }}>
-            <span className="mi-glyph">💬</span> Chats
-          </button>
-          <button className="phoenix-menu-item" role="menuitem" onClick={() => { setPhoenixOpen(false); openSystem(); }}>
-            <span className="mi-glyph">📜</span> System Prompts
-          </button>
-        </div>
-      )}
-      {lionOpen && (
-        <div className="sky-card lion-popup" role="menu">
-          <div className="sky-card-title">Settings</div>
-          <button className="setting-btn" onClick={cycleFontSize}>Aa  Font size: {fontSize}</button>
-          <button className="setting-btn" onClick={() => setWalnutTheme((v) => !v)}>🎨  Color theme</button>
-          <button className="setting-btn" onClick={() => setSolidBubbles((v) => !v)}>💧  Bubble opacity</button>
-          <button className="setting-btn" onClick={() => setPlainText((v) => !v)}>✎  Text style: {plainText ? "Plain" : "Bubbles"}</button>
-          <button className="setting-btn" onClick={() => { setLionOpen(false); setSettingsPopupOpen(true); setAddModelFeedback(null); }} title="More settings">🌙  Advanced…</button>
-          <div className="sky-card-title">Account</div>
-          <input
-            className="lion-name-input"
-            placeholder="Your name (shown next to your messages)"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            onBlur={() => { void postPrefs({ action: "save", prefs: { displayName: displayName.trim() } }); }}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-          />
-          <button className="setting-btn" onClick={handleLogout} title="Sign out">⎋  Log out</button>
-        </div>
-      )}
+      <SkyBar
+        chatName={activeSession ? activeSession.name : ""}
+        promptName={
+          activeSession?.systemPromptId
+            ? systemPrompts.find((p) => p.id === activeSession.systemPromptId)?.name ?? "(deleted prompt)"
+            : "No System Prompt Selected"
+        }
+        phoenixOpen={phoenixOpen}
+        lionOpen={lionOpen}
+        onTogglePhoenix={() => { setLionOpen(false); setPhoenixOpen((v) => !v); dismissGuide("phoenix"); }}
+        onToggleLion={() => { setPhoenixOpen(false); setLionOpen((v) => !v); dismissGuide("lion"); }}
+        onCloseMenus={() => { setPhoenixOpen(false); setLionOpen(false); }}
+        onOpenChats={openChats}
+        onOpenSystem={openSystem}
+        fontSize={fontSize}
+        onCycleFont={cycleFontSize}
+        onToggleWalnut={() => setWalnutTheme((v) => !v)}
+        onToggleSolid={() => setSolidBubbles((v) => !v)}
+        plainText={plainText}
+        onTogglePlain={() => setPlainText((v) => !v)}
+        onAdvanced={() => { setSettingsPopupOpen(true); setAddModelFeedback(null); }}
+        displayName={displayName}
+        onDisplayNameChange={setDisplayName}
+        onSaveDisplayName={() => { void postPrefs({ action: "save", prefs: { displayName: displayName.trim() } }); }}
+        onLogout={handleLogout}
+        guide={guide}
+      />
 
       {/* Chats sidebar */}
       <div className={`sidebar-drawer chats-sidebar${chatsOpen ? " open" : ""}`}>
@@ -1056,9 +789,8 @@ export default function Page() {
             .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
             .map((session) => {
             const isRenaming = renamingId === session.id;
-            const isConfirmingDelete = confirmDeleteId === session.id;
             const handleRowClick = () => {
-              if (isRenaming || isConfirmingDelete) return;
+              if (isRenaming) return;
               selectSession(session.id);
             };
             return (
@@ -1102,33 +834,6 @@ export default function Page() {
                       onClick={(e) => {
                         e.stopPropagation();
                         cancelRename();
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </>
-                ) : isConfirmingDelete ? (
-                  <>
-                    <span className="chat-name" title={session.name}>
-                      {session.name}
-                    </span>
-                    <span className="chat-row-confirm-text">Delete?</span>
-                    <button
-                      className="row-mini-btn row-mini-btn-danger"
-                      title="Yes, delete this chat"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        confirmDeleteSession();
-                      }}
-                    >
-                      ✓
-                    </button>
-                    <button
-                      className="row-mini-btn"
-                      title="Cancel"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        cancelDeleteConfirm();
                       }}
                     >
                       ✕

@@ -269,14 +269,14 @@ export default function Page() {
         if (error) {
           setBanner({ kind: "error", text: error.message });
         } else {
-          // Save the friend's name to prefs right away (best effort — never blocks signup).
-          if (name.trim()) {
+          // New account: save the friend's name + turn on the first-run guide (best effort — never blocks signup).
+          {
             try {
               const { data: { session } } = await supabase.auth.getSession();
               void fetch("/api/prefs", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "save", accessToken: session?.access_token, prefs: { displayName: name.trim() } }),
+                body: JSON.stringify({ action: "save", accessToken: session?.access_token, prefs: { displayName: name.trim(), showGuide: true } }),
               });
             } catch { /* ignore */ }
           }

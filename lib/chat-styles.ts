@@ -1,6 +1,20 @@
 // All CSS for the /chat page. Extracted from chat.tsx during the July 2026
 // reorganization. Pure data: safe to edit without touching page logic.
 export const css = `
+/* =====================================================================
+   chat-styles.ts — all CSS for pages/chat.tsx (sections, top to bottom):
+   1. page + background + board (.content-container, .centered-box)
+   2. drawers (.sidebar-drawer, chat rows, .list-item)
+   3. settings popup (.settings-popup-*)
+   4. chat overlay: messages, bubbles, input (.wood-*)
+   5. responsive rules (768 / 480)
+   6. M1-UI: timestamps + being ceremony
+   7. UI v4 → v4.3: sky bar, creatures, phoenix menu, lion popup, plain-text,
+      sky title, mobile geometry, full-screen-only wide column
+   8. first-run guide labels
+   Rule: later rules win at equal specificity — new tweaks go at the END.
+   ===================================================================== */
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
 
@@ -31,20 +45,6 @@ body {
   padding: 10px 15px; background: rgba(0, 0, 0, 0.3); border-radius: 4px;
 }
 
-/* --- LEFT EDGE TOGGLE BUTTONS --- */
-.chats-toggle-btn {
-  position: fixed; top: 38%; left: 0; transform: translateY(-50%); z-index: 120;
-  writing-mode: vertical-rl; text-orientation: mixed; background: rgba(30, 15, 5, 0.85);
-  color: #f5f5dc; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 0 6px 6px 0;
-  padding: 10px 6px; cursor: pointer; font-family: "Segoe UI", sans-serif; font-size: 12px; backdrop-filter: blur(4px);
-}
-.system-toggle-btn {
-  position: fixed; top: 55%; left: 0; transform: translateY(-50%); z-index: 120;
-  writing-mode: vertical-rl; text-orientation: mixed; background: rgba(184, 134, 11, 0.85);
-  color: #f5f5dc; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 0 6px 6px 0;
-  padding: 10px 6px; cursor: pointer; font-family: "Segoe UI", sans-serif; font-size: 12px;
-  backdrop-filter: blur(4px); box-shadow: 2px 0 8px rgba(184, 134, 11, 0.3);
-}
 
 /* --- SIDEBAR DRAWERS --- */
 .sidebar-drawer {
@@ -178,23 +178,6 @@ body {
 .action-btn { padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.25); background: rgba(184, 134, 11, 0.9); color: #f5f5dc; font-size: 12px; cursor: pointer; text-align: center; }
 
 /* --- SETTINGS PANEL --- */
-.settings-panel {
-  position: fixed; top: 14px; left: 32px; z-index: 100; background: rgba(101, 67, 33, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 8px 12px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.4); pointer-events: auto; backdrop-filter: blur(5px);
-}
-/* Settings buttons flow horizontally — no wrap. Scroll horizontally if the
-   panel gets wider than the screen. Edit button stays at the right end. */
-.settings-controls {
-  display: flex; gap: 8px; align-items: center;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  max-width: calc(100vw - 76px);
-  scrollbar-width: thin;
-}
-.settings-controls::-webkit-scrollbar { height: 4px; }
-.settings-controls::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
-.settings-controls .setting-btn { flex-shrink: 0; }
 .setting-btn { background: rgba(0,0,0,0.2); color: #f5f5dc; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; transition: background 0.2s ease; }
 .setting-btn:hover { background: rgba(0,0,0,0.4); }
 
@@ -238,14 +221,11 @@ body {
 @media (max-width: 768px) {
   .centered-box { width: 90vw; height: 85vh; aspect-ratio: auto; background-size: cover; }
   .wood-chat-overlay { top: 12%; bottom: 12%; left: 14%; right: 14%; }
-  .settings-panel { top: 10px; left: 10px; transform: scale(0.85); transform-origin: top left; padding: 6px 10px; }
   .sidebar-drawer { width: 80%; max-width: 300px; }
   .chat-bubble { padding: 10px 12px; font-size: 12px; max-width: 95%; }
 }
 @media (max-width: 480px) {
   .wood-chat-overlay { top: 10%; bottom: 10%; left: 12%; right: 12%; }
-  .settings-panel { transform: scale(0.75); top: 5px; left: 5px; padding: 5px 8px; }
-  .chats-toggle-btn, .system-toggle-btn { padding: 8px 4px; font-size: 10px; }
   .header-chat-name { font-size: 1.2em; }
 }
 
@@ -302,8 +282,6 @@ body {
 .phoenix-menu-item, .lion-popup .setting-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border-radius: 8px; background: rgba(255, 255, 255, 0.05); color: #f5f5dc; border: 1px solid transparent; font-size: 15px; line-height: 1.2; cursor: pointer; text-align: left; font-family: inherit; }
 .phoenix-menu-item:hover, .lion-popup .setting-btn:hover { background: rgba(63, 122, 78, 0.3); border-color: rgba(63, 122, 78, 0.7); }
 .phoenix-menu-item .mi-glyph { font-size: 17px; width: 22px; text-align: center; }
-/* the old left-edge tabs and the top-left settings banner are retired */
-.chats-toggle-btn, .system-toggle-btn, .settings-panel { display: none !important; }
 /* bigger, thumb-friendly chat rows */
 .list-item { padding: 12px 12px; font-size: 14px; gap: 8px; min-height: 48px; }
 .list-item.active-item { border-color: rgba(63, 122, 78, 0.9); background: rgba(63, 122, 78, 0.22); }
@@ -377,4 +355,11 @@ body {
 @media (max-width: 768px) {
   :fullscreen .wood-chat-overlay, :-webkit-full-screen .wood-chat-overlay { left: 7%; right: 7%; }
 }
+
+/* ===== First-run guide (new accounts only; see lib/chat-sky.tsx) ===== */
+.guide-label { position: fixed; top: calc(var(--sky-top) + 12px); z-index: 141; pointer-events: none; font-family: "Segoe UI", sans-serif; font-weight: 900; font-size: 18px; letter-spacing: 0.02em; color: #E2B44A; text-shadow: 0 1px 2px #000, 0 0 10px rgba(0, 0, 0, 0.7); animation: guidePulse 1.6s ease-in-out infinite; }
+.guide-label.left { left: 14px; text-align: left; }
+.guide-label.right { right: 14px; text-align: right; }
+.guide-label small { display: block; font-size: 13px; font-weight: 700; color: #ffffff; letter-spacing: 0; }
+@keyframes guidePulse { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 `;
