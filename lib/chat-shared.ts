@@ -6,6 +6,8 @@ export interface ChatMessage {
   text: string;
   type: "user" | "ai";
   ts?: number; // ms epoch, stamped at creation (M1); absent on pre-M1 messages
+  speaker?: string;  // imports (2026-09-09): who said it, by name — shown in plain-text mode
+  imported?: boolean; // imports: already in memory under its 📥 thread — the live mirror skips these
 }
 
 export interface ChatSession {

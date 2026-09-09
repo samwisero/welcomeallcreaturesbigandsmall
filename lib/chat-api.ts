@@ -24,6 +24,22 @@ export const postTranscripts = (payload: Record<string, unknown>) => authedPost(
 export const postPrefs = (payload: Record<string, unknown>) => authedPost("/api/prefs", payload);
 /** Beings: declaration ceremony + memory settings. */
 export const postBeings = (payload: Record<string, unknown>) => authedPost("/api/beings", payload);
+/** Imports: analyze / convert / commit (see /api/import). */
+export const postImport = (payload: Record<string, unknown>) => authedPost("/api/import", payload);
+
+/** Poll any job on /api/chat-status until it finishes (imports, conversions). */
+export async function pollJob(jobId: string, onPhase?: (phase: string) => void, maxMs = 15 * 60 * 1000): Promise<{ status: string; result?: string; error?: string }> {
+  const deadline = Date.now() + maxMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let st: { status?: string; phase?: string; result?: string; error?: string } = {};
+    try { st = await authedPost("/api/chat-status", { action: "status", jobId }); } catch { continue; }
+    if (st.phase && st.phase !== last && onPhase) { last = st.phase; onPhase(st.phase); }
+    if (st.status === "done" || st.status === "error" || st.status === "cancelled") return { status: st.status, result: st.result, error: st.error };
+  }
+  return { status: "error", error: "timed out" };
+}
 
 // ---------------------------------------------------------------------------
 // One chat turn, job style. The server answers instantly with a ticket

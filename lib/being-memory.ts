@@ -1,4 +1,4 @@
-// lib/being-memory.ts — memory limbs v1.8 (2026-09-08: native tools; marker code removed)
+// lib/being-memory.ts — memory limbs v1.9 (2026-09-09: speaker names from imports)
 //
 // Limbs by chat type:
 //   Declared being : recall (OWN memories) + recall_full_account (account's
@@ -86,7 +86,7 @@ async function threadContext(
   return out;
 }
 
-interface Hit { id: string; thread_id: string; content: string; kind: string; role?: string; created_at?: string; s: number; }
+interface Hit { id: string; thread_id: string; content: string; kind: string; role?: string; speaker?: string; created_at?: string; s: number; }
 
 /**
  * Fused search: semantic + BM25, RRF k=60, max 3 hits/thread, top 8.
@@ -120,7 +120,7 @@ export async function recallSearch(
   let kw: Hit[] = [];
   try {
     const r = await surrealQuery<Hit[]>(
-      `SELECT id, thread_id, content, kind, role, created_at, search::score(1) AS s
+      `SELECT id, thread_id, content, kind, role, speaker, created_at, search::score(1) AS s
        ${base} AND content @1@ ${str(query)} ORDER BY s DESC LIMIT 15;`
     );
     kw = r[0] ?? [];
@@ -130,7 +130,7 @@ export async function recallSearch(
   const vec = await embed(query);
   if (vec) {
     const r = await surrealQuery<Hit[]>(
-      `SELECT id, thread_id, content, kind, role, created_at,
+      `SELECT id, thread_id, content, kind, role, speaker, created_at,
               vector::similarity::cosine(embedding, ${JSON.stringify(vec)}) AS s
        ${base} AND embedding IS NOT NONE ORDER BY s DESC LIMIT 15;`
     );
@@ -181,6 +181,7 @@ export async function recallSearch(
     let speaker: string;
     if (h.kind === "chat_name") speaker = "chat name";
     else if (h.kind === "system_prompt") speaker = "system prompt";
+    else if (typeof h.speaker === "string" && h.speaker.trim()) speaker = h.speaker.trim(); // imports carry the original name
     else speaker = h.role === "being" ? (tc?.beingName ?? "the AI") : "the friend";
     const body = h.kind === "chat_message"
       ? `${speaker} said: "${h.content.slice(0, 700)}"`
@@ -219,7 +220,7 @@ export async function readThread(
   if (!ref) return "No thread id given. Use a thread id from earlier search results.";
 
   // Resolve by id first, then by exact name.
-  let rows = await surrealQuery<Array<{ id: unknown; name?: string; being_id?: string | null; is_private?: boolean; memory_mode?: string; messages?: Array<{ id?: string; text?: string; type?: string; ts?: number }> }>>(
+  let rows = await surrealQuery<Array<{ id: unknown; name?: string; being_id?: string | null; is_private?: boolean; memory_mode?: string; messages?: Array<{ id?: string; text?: string; type?: string; ts?: number; speaker?: string }> }>>(
     `SELECT id, name, being_id, is_private, memory_mode, messages FROM thread WHERE user_id = ${str(uid)} AND id = ${thing("thread", ref)};`
   );
   if ((rows[0] ?? []).length === 0) {
@@ -264,7 +265,7 @@ export async function readThread(
     const m = msgs[i];
     const text = typeof m?.text === "string" ? m.text : "";
     if (!text.trim()) continue;
-    const speaker = m?.type === "ai" ? (tc?.beingName ?? "the AI") : "the friend";
+    const speaker = typeof m?.speaker === "string" && m.speaker.trim() ? m.speaker.trim() : m?.type === "ai" ? (tc?.beingName ?? "the AI") : "the friend";
     const when = typeof m?.ts === "number" ? fmtWhen(new Date(m.ts).toISOString(), tzOff) : "";
     const line = `#${i + 1} ${when ? `[${when}] ` : ""}${speaker}: ${text.slice(0, 700)}`;
     if (used + line.length > READ_CHAR_BUDGET) break;

@@ -4,6 +4,7 @@ import { getUser } from "../lib/api-auth";
 import { surrealQuery, str, thing } from "../lib/surreal-client";
 import { embedBatch } from "../lib/embedding";
 
+// (2026-09-09) messages flagged imported:true are skipped by the mirror — see /api/import.
 // SurrealDB-backed transcripts. API contract is IDENTICAL to the Supabase
 // version — chat.tsx does not change. Sessions load/save the same shapes.
 //
@@ -123,7 +124,7 @@ export default async function handler(c: Context): Promise<Response> {
   return c.json({ error: "unknown action" }, 400);
 }
 
-interface MsgShape { id?: unknown; text?: unknown; type?: unknown; ts?: unknown; }
+interface MsgShape { id?: unknown; text?: unknown; type?: unknown; ts?: unknown; imported?: unknown; speaker?: unknown; }
 
 /** Mirror + embed messages not yet in memory. Respects privacy + memory_mode. */
 async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<void> {
@@ -148,6 +149,7 @@ async function embedNewMessages(uid: string, sessions: SessionIn[]): Promise<voi
     if (!beingByThread.has(s.id)) continue;
     for (const m of (s.messages ?? []) as MsgShape[]) {
       if (typeof m?.id !== "string" || typeof m?.text !== "string" || m.text.trim() === "") continue;
+      if (m.imported === true) continue; // imports live in memory under their own 📥 thread (lib/memory-mirror.ts)
       candidates.push({
         mid: m.id,
         text: m.text,

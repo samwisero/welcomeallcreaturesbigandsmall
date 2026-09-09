@@ -3,7 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase-client";
 import { css } from "../lib/chat-styles";
-import { postTranscripts, postPrefs, postBeings, runChatTurn, cancelChatJob } from "../lib/chat-api";
+import { postTranscripts, postPrefs, postBeings, runChatTurn, cancelChatJob, postImport, pollJob } from "../lib/chat-api";
+import { ImportPopup, type ImportResult } from "../lib/chat-import";
 import { renderWithLinks, fmtStamp } from "../lib/chat-format";
 import { Dropdown } from "../lib/chat-widgets";
 import { SkyBar } from "../lib/chat-sky";
@@ -119,6 +120,7 @@ export default function Page() {
   const [plainText, setPlainText] = useState(false); // UI v4.1: bare white text instead of bubbles
   const [displayName, setDisplayName] = useState(""); // UI v4.2: the friend's name, shown next to their lines in plain mode
   const [guide, setGuide] = useState({ phoenix: false, lion: false }); // first-run labels (new accounts only)
+  const [importOpen, setImportOpen] = useState(false); // 📥 Import popup
   const [newChatName, setNewChatName] = useState("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
@@ -371,7 +373,6 @@ export default function Page() {
 
   // --- Rename / delete handlers (Chunk 3) ---
   function startRename(session: ChatSession) {
-    setConfirmDeleteId(null);
     setRenamingId(session.id);
     setRenameDraft(session.name);
   }
@@ -719,6 +720,44 @@ export default function Page() {
       return next;
     });
   }
+  // After an import: pull the new 📥 chat(s) from the cloud without touching
+  // anything already on screen (no clobbering of unsaved local edits).
+  async function mergeNewSessionsFromCloud() {
+    try {
+      const { sessions } = await postTranscripts({ action: "load" });
+      const list: ChatSession[] = Array.isArray(sessions) ? sessions : [];
+      setChatSessions((prev) => {
+        const have = new Set(prev.map((s) => s.id));
+        const fresh = list
+          .filter((s) => !have.has(s.id))
+          .map((s) => ({ ...s, modelId: s.modelId || DEFAULT_MODEL_ID, messages: Array.isArray(s.messages) ? s.messages.map((m) => ({ ...m, id: m.id || generateId() })) : [] }));
+        return fresh.length ? [...prev, ...fresh] : prev;
+      });
+    } catch (err) {
+      console.error("merge after import failed", err);
+    }
+  }
+
+  async function onImported(result: ImportResult, mode: "context" | "memory") {
+    await mergeNewSessionsFromCloud();
+    if (mode === "context" && activeSession) {
+      const sid = activeSession.id;
+      const now = Date.now();
+      const injected: ChatMessage[] = result.injected.map((m) => ({ id: generateId(), text: m.text, type: m.type, ts: m.ts ?? now, speaker: m.speaker, imported: true }));
+      const card: ChatMessage[] = result.indexCard ? [{ id: generateId(), text: result.indexCard, type: "user", ts: now }] : [];
+      setChatSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, messages: [...s.messages, ...injected, ...card], updatedAt: now } : s)));
+    }
+  }
+
+  /** How many tokens the current chat can still take before the model window is tight. */
+  function contextBudgetTokens(): number {
+    if (!activeSession) return 0;
+    const modelEntry = allModels.find((m) => m.id === activeSession.modelId) ?? allModels.find((m) => m.id === DEFAULT_MODEL_ID);
+    const window = modelEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    const used = activeSession.messages.reduce((n, m) => n + estimateTokens(m.text), 0);
+    return Math.max(1000, Math.floor(window * 0.85) - used);
+  }
+
   function openChats() {
     setSystemOpen(false);
     setChatsOpen(true);
@@ -770,6 +809,7 @@ export default function Page() {
         onDisplayNameChange={setDisplayName}
         onSaveDisplayName={() => { void postPrefs({ action: "save", prefs: { displayName: displayName.trim() } }); }}
         onLogout={handleLogout}
+        onImport={() => setImportOpen(true)}
         guide={guide}
       />
 
@@ -1002,8 +1042,8 @@ export default function Page() {
                       if (!isConfirming) setSelectedMessageId(m.id);
                     }}
                   >
-                    {(i === 0 || activeSession.messages[i - 1].type !== m.type) && (
-                      <span className="speaker">{m.type === "ai" ? activeSession.name : (displayName.trim() || "You")}</span>
+                    {(i === 0 || activeSession.messages[i - 1].type !== m.type || (activeSession.messages[i - 1].speaker ?? "") !== (m.speaker ?? "")) && (
+                      <span className="speaker">{m.speaker?.trim() || (m.type === "ai" ? activeSession.name : (displayName.trim() || "You"))}</span>
                     )}
                     <span>{renderWithLinks(m.text)}</span>
                     {isSelected && m.ts ? (
@@ -1209,6 +1249,20 @@ export default function Page() {
             )}
           </div>
         </div>
+      )}
+
+      {importOpen && activeSession && (
+        <ImportPopup
+          targetThreadId={activeSession.id}
+          targetName={activeSession.name}
+          targetIsBeing={Boolean((activeSession as unknown as { beingId?: string | null }).beingId)}
+          beingName={null}
+          contextBudgetTokens={contextBudgetTokens()}
+          api={postImport}
+          pollJob={pollJob}
+          onImported={onImported}
+          onClose={() => setImportOpen(false)}
+        />
       )}
 
       {celebrating && (

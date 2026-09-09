@@ -23,6 +23,7 @@ export interface SkyBarProps {
   onDisplayNameChange: (v: string) => void;
   onSaveDisplayName: () => void;
   onLogout: () => void;
+  onImport: () => void; // 📥 Import popup (documents / transcripts → context or memory)
   /** First-run guide (new accounts only): which labels are still showing. */
   guide: { phoenix: boolean; lion: boolean };
 }
@@ -88,6 +89,8 @@ export function SkyBar(p: SkyBarProps) {
           <button className="setting-btn" onClick={p.onToggleSolid}>💧  Bubble opacity</button>
           <button className="setting-btn" onClick={p.onTogglePlain}>✎  Text style: {p.plainText ? "Plain" : "Bubbles"}</button>
           <button className="setting-btn" onClick={() => { p.onCloseMenus(); p.onAdvanced(); }} title="More settings">🌙  Advanced…</button>
+          <div className="sky-card-title">Memory</div>
+          <button className="setting-btn" onClick={() => { p.onCloseMenus(); p.onImport(); }} title="Bring a document or transcript into this chat or its memory">📥  Import a document…</button>
           <div className="sky-card-title">Account</div>
           <input
             className="lion-name-input"

@@ -362,4 +362,28 @@ body {
 .guide-label.right { right: 14px; text-align: right; }
 .guide-label small { display: block; font-size: 13px; font-weight: 700; color: #ffffff; letter-spacing: 0; }
 @keyframes guidePulse { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+/* ===== 📥 Import popup (lib/chat-import.tsx) ===== */
+.import-card { width: min(560px, 94vw); }
+.import-textarea { width: 100%; box-sizing: border-box; background: rgba(0, 0, 0, 0.35); color: #f4e9d8; border: 1px solid #b08d57; border-radius: 8px; padding: 10px; font: inherit; font-size: 13.5px; line-height: 1.4; resize: vertical; outline: none; }
+.import-textarea:focus { border-color: #E2B44A; }
+.import-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
+.import-hint { font-size: 12px; opacity: 0.75; }
+.import-choice { display: flex; gap: 8px; margin: 10px 0 6px; flex-wrap: wrap; }
+.import-choice label { flex: 1 1 200px; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(176, 141, 87, 0.5); background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 14px; }
+.import-choice label.on { border-color: #3F7A4E; background: rgba(63, 122, 78, 0.22); }
+.import-check { display: flex; align-items: center; gap: 8px; font-size: 13px; opacity: 0.9; margin: 4px 0 12px; }
+.import-note { font-size: 13px; opacity: 0.9; margin: 8px 0; line-height: 1.45; }
+.import-speaker { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.25); margin: 6px 0; }
+.import-speaker-name { font-weight: 700; color: #E2B44A; }
+.import-speaker-name small { color: #f4e9d8; opacity: 0.6; font-weight: 400; }
+.import-speaker-opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.import-speaker-opts .row-mini-btn { padding: 8px 10px; font-size: 13px; }
+.import-speaker-opts .row-mini-btn.on { background: rgba(63, 122, 78, 0.35); border-color: #3F7A4E; color: #fff; }
+.import-preview { margin: 10px 0; padding: 8px 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.3); max-height: 180px; overflow-y: auto; font-size: 12.5px; line-height: 1.4; }
+.import-preview-line { margin: 4px 0; }
+.import-preview-line.left b { color: #E2B44A; }
+.import-preview-line.right { text-align: right; }
+.import-preview-line.right b { color: #d9b48a; }
+.import-done .being-declared-banner { margin-bottom: 8px; }
 `;
