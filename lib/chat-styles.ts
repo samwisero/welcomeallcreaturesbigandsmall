@@ -39,11 +39,6 @@ body {
   pointer-events: auto; flex-shrink: 0; position: relative;
 }
 
-.indicator {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255, 255, 255, 0.6);
-  font-size: 12px; font-family: Arial, sans-serif; z-index: 2; cursor: pointer;
-  padding: 10px 15px; background: rgba(0, 0, 0, 0.3); border-radius: 4px;
-}
 
 
 /* --- SIDEBAR DRAWERS --- */
@@ -297,7 +292,6 @@ body {
   .content-container { top: var(--sky-top); height: calc(100dvh - var(--sky-top) - var(--sky-bottom)); }
   .centered-box { width: 100vw; height: 100%; }
   .save-pill { position: fixed; top: auto; right: auto; bottom: 12px; left: 12px; }
-  .indicator { bottom: 8px; padding: 6px 12px; }
 }
 
 /* ===== UI v4.1 (2026-09-09): bigger creatures w/ gold outline, feet on the board; compact header; room to type; plain-text mode ===== */
@@ -396,4 +390,14 @@ body {
 .import-file-remove:hover { opacity: 1; color: #E2B44A; }
 .import-thread-list { list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; line-height: 1.5; }
 .import-thread-list small { opacity: 0.65; }
+
+/* ---- v4.5 (2026-09-10): fullscreen moved into the phoenix menu; edit/delete own system prompts ---- */
+.prompt-item-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.prompt-item-row strong { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-item-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.prompt-item-btns .row-mini-btn { padding: 6px 9px; font-size: 13px; }
+.prompt-confirm { font-size: 12px; color: #ffd6d2; }
+.prompt-tag { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(245, 245, 220, 0.55); border: 1px solid rgba(245, 245, 220, 0.25); border-radius: 4px; padding: 2px 6px; flex-shrink: 0; }
+.prompt-editing-note { font-size: 12px; color: #E2B44A; font-weight: 700; }
+.action-btn.action-btn-quiet { background: transparent; border-color: rgba(255, 255, 255, 0.35); }
 `;

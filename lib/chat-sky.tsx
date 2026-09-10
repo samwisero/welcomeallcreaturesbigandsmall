@@ -12,6 +12,8 @@ export interface SkyBarProps {
   onCloseMenus: () => void;
   onOpenChats: () => void;
   onOpenSystem: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void; // moved here from the bottom-of-page indicator (2026-09-10)
   fontSize: number;
   onCycleFont: () => void;
   onToggleWalnut: () => void;
@@ -77,6 +79,9 @@ export function SkyBar(p: SkyBarProps) {
           </button>
           <button className="phoenix-menu-item" role="menuitem" onClick={() => { p.onCloseMenus(); p.onOpenSystem(); }}>
             <span className="mi-glyph">📜</span> System Prompts
+          </button>
+          <button className="phoenix-menu-item" role="menuitem" onClick={() => { p.onCloseMenus(); p.onToggleFullscreen(); }}>
+            <span className="mi-glyph">{p.isFullscreen ? "🡼" : "⛶"}</span> {p.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           </button>
         </div>
       )}

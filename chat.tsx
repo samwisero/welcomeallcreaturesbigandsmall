@@ -124,6 +124,8 @@ export default function Page() {
   const [newChatName, setNewChatName] = useState("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
+  const [editingPromptId, setEditingPromptId] = useState<string | null>(null); // prompt being edited in the form
+  const [promptDeleteArmed, setPromptDeleteArmed] = useState<string | null>(null); // prompt with the ✓/✕ confirm showing
   const [inputText, setInputText] = useState("");
   const [cloudReadDone, setCloudReadDone] = useState(false);
   // Per-effect save status. The rendered pill is derived as "worst of" so a
@@ -445,16 +447,48 @@ export default function Page() {
     );
   }
 
+  // Presets ship with the app and are re-merged on every load, so only the
+  // friend's own prompts can be edited or deleted (2026-09-10).
+  const isPresetPrompt = (id: string) => DEFAULT_PROMPTS.some((p) => p.id === id);
+
   function saveNewPrompt() {
     const name = newPromptName.trim();
     const text = newPromptText.trim();
     if (!name || !text) return;
-    const id = "prompt_" + Date.now().toString();
-    const newPrompt: SystemPrompt = { id, name, text };
-    setSystemPrompts((prev) => [...prev, newPrompt]);
-    if (activeSessionId) setChatSystemPrompt(activeSessionId, id);
+    if (editingPromptId) {
+      const eid = editingPromptId;
+      setSystemPrompts((prev) => prev.map((p) => (p.id === eid ? { ...p, name, text } : p)));
+      setEditingPromptId(null);
+    } else {
+      const id = "prompt_" + Date.now().toString();
+      const newPrompt: SystemPrompt = { id, name, text };
+      setSystemPrompts((prev) => [...prev, newPrompt]);
+      if (activeSessionId) setChatSystemPrompt(activeSessionId, id);
+    }
     setNewPromptName("");
     setNewPromptText("");
+  }
+
+  function startEditPrompt(p: SystemPrompt) {
+    setEditingPromptId(p.id);
+    setNewPromptName(p.name);
+    setNewPromptText(p.text);
+    setPromptDeleteArmed(null);
+  }
+
+  function cancelEditPrompt() {
+    setEditingPromptId(null);
+    setNewPromptName("");
+    setNewPromptText("");
+  }
+
+  function deletePrompt(id: string) {
+    if (isPresetPrompt(id)) return;
+    setSystemPrompts((prev) => prev.filter((p) => p.id !== id));
+    // chats that used it fall back to "no system prompt" instead of pointing at a ghost
+    setChatSessions((prev) => prev.map((s) => (s.systemPromptId === id ? { ...s, systemPromptId: null, updatedAt: Date.now() } : s)));
+    if (editingPromptId === id) cancelEditPrompt();
+    setPromptDeleteArmed(null);
   }
 
   // --- Being ceremony handlers (M1-UI) ---
@@ -701,6 +735,14 @@ export default function Page() {
     setFontIndex((i) => (i + 1) % FONT_SIZES.length);
   }
 
+  // Fullscreen lives in the phoenix menu (2026-09-10); the label follows the real state.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
   function toggleFullscreen() {
     const elem = document.documentElement;
     if (!document.fullscreenElement) {
@@ -799,6 +841,8 @@ export default function Page() {
         onCloseMenus={() => { setPhoenixOpen(false); setLionOpen(false); }}
         onOpenChats={openChats}
         onOpenSystem={openSystem}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
         fontSize={fontSize}
         onCycleFont={cycleFontSize}
         onToggleWalnut={() => setWalnutTheme((v) => !v)}
@@ -965,7 +1009,23 @@ export default function Page() {
                 }}
                 style={{ flexDirection: "column", alignItems: "flex-start" }}
               >
-                <strong>{prompt.name}</strong>
+                <div className="prompt-item-row">
+                  <strong>{prompt.name}</strong>
+                  {isPresetPrompt(prompt.id) ? (
+                    <span className="prompt-tag" title="Built-in prompt — copy it into a new one to change it">preset</span>
+                  ) : promptDeleteArmed === prompt.id ? (
+                    <span className="prompt-item-btns" onClick={(e) => e.stopPropagation()}>
+                      <span className="prompt-confirm">Delete?</span>
+                      <button className="row-mini-btn row-mini-btn-danger" title="Yes, delete" onClick={() => deletePrompt(prompt.id)}>✓</button>
+                      <button className="row-mini-btn" title="Keep it" onClick={() => setPromptDeleteArmed(null)}>✕</button>
+                    </span>
+                  ) : (
+                    <span className="prompt-item-btns" onClick={(e) => e.stopPropagation()}>
+                      <button className="row-mini-btn" title="Edit this prompt" onClick={() => startEditPrompt(prompt)}>✎</button>
+                      <button className="row-mini-btn row-mini-btn-danger" title="Delete this prompt" onClick={() => setPromptDeleteArmed(prompt.id)}>🗑</button>
+                    </span>
+                  )}
+                </div>
                 <span
                   style={{
                     fontSize: "10px",
@@ -979,6 +1039,7 @@ export default function Page() {
           })}
         </div>
         <div className="new-area">
+          {editingPromptId && <div className="prompt-editing-note">✎ Editing “{systemPrompts.find((p) => p.id === editingPromptId)?.name ?? ""}”</div>}
           <input
             type="text"
             className="system-input"
@@ -993,8 +1054,11 @@ export default function Page() {
             onChange={(e) => setNewPromptText(e.target.value)}
           />
           <button className="action-btn" onClick={saveNewPrompt}>
-            Save & Select
+            {editingPromptId ? "Save changes" : "Save & Select"}
           </button>
+          {editingPromptId && (
+            <button className="action-btn action-btn-quiet" onClick={cancelEditPrompt}>Cancel</button>
+          )}
         </div>
       </div>
 
@@ -1395,9 +1459,6 @@ export default function Page() {
         </div>
       )}
 
-      <div className="indicator" onClick={toggleFullscreen}>
-        Click to toggle fullscreen
-      </div>
     </div>
   );
 }
