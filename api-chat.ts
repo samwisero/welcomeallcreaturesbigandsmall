@@ -115,7 +115,7 @@ export default async function handler(c: Context): Promise<Response> {
   // Resolve provider: explicit value in body wins; otherwise look up in the
   // built-in registry. If neither matches, refuse rather than guessing.
   let provider: Provider;
-  if (body.provider === "venice" || body.provider === "openrouter") {
+  if (body.provider === "venice" || body.provider === "openrouter" || body.provider === "beam") {
     provider = body.provider;
   } else if (BUILT_IN_MODELS[modelId]) {
     provider = BUILT_IN_MODELS[modelId].provider;
@@ -245,7 +245,9 @@ async function runTurn(a: TurnArgs): Promise<string> {
     void isCancelled().then((c) => { if (c) ac.abort(); });
   }, 2000);
 
-  await setPhase("thinking");
+  // Beam scales to zero: after a quiet spell the first token can take a minute while the
+  // GPU container wakes (snapshot restore) — tell the friend instead of looking frozen.
+  await setPhase(provider === "beam" ? "waking the being's mind (first message after a pause can take a minute)…" : "thinking");
   try {
     const result = streamText({
       model,

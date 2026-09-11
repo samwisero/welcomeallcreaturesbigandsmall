@@ -6,7 +6,9 @@
 // (media, phone, …) reuse this instead of growing api-chat.ts.
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
-export type Provider = "venice" | "openrouter";
+// v1.1 (2026-09-11): + "beam" — our own llama.cpp server on Beam Cloud (Qwen3.8-27B-Uncensored,
+// RTX4090, OpenAI-compatible /v1). Secrets: BEAM_LLM_URL (deployment URL) + BEAM_TOKEN (Bearer).
+export type Provider = "venice" | "openrouter" | "beam";
 
 // Defensive: zo's secrets UI sometimes stores values with surrounding quotes
 // (the user can paste "sk-..." and the quotes get treated as part of the
@@ -20,6 +22,8 @@ function cleanKey(raw: string | undefined): string | undefined {
   return v;
 }
 
+export const BEAM_DEFAULT_URL = "https://qwen-27b-fff321f.app.beam.cloud"; // deployment "qwen-27b", RTX4090, 131K ctx
+
 export interface Endpoint {
   baseURL: string;
   key: string | undefined;
@@ -29,6 +33,12 @@ export interface Endpoint {
 export function endpointFor(provider: Provider): Endpoint {
   if (provider === "venice") {
     return { baseURL: "https://api.venice.ai/api/v1", key: cleanKey(process.env.VENICE_AI), keyName: "VENICE_AI" };
+  }
+  if (provider === "beam") {
+    // Stable (version-less) Beam deployment URL — survives redeploys (verified 2026-09-11: -v3 and the
+    // bare host both answer). BEAM_LLM_URL in secrets overrides it; llama-server speaks /v1 behind our proxy.
+    const base = (cleanKey(process.env.BEAM_LLM_URL) ?? BEAM_DEFAULT_URL).replace(/\/+$/, "");
+    return { baseURL: `${base}/v1`, key: cleanKey(process.env.BEAM_TOKEN), keyName: "BEAM_TOKEN" };
   }
   return { baseURL: "https://openrouter.ai/api/v1", key: cleanKey(process.env.OPENROUTER_API_KEY), keyName: "OPENROUTER_API_KEY" };
 }

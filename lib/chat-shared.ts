@@ -31,7 +31,7 @@ export interface ModelOption {
   shortName: string;
   // Tells the backend which API to dispatch to. Required for every model,
   // including user-added custom ones from the Add Model form.
-  provider: "venice" | "openrouter";
+  provider: "venice" | "openrouter" | "beam";
   // Total context window in tokens; undefined -> DEFAULT_CONTEXT_WINDOW.
   contextWindow?: number;
 }
@@ -42,11 +42,21 @@ export interface ModelOption {
 
 // THE one model catalog — imported by the /chat page AND /api/chat, so the
 // client picker and the server registry can no longer drift apart.
-export const DEFAULT_MODEL_ID = "olafangensan-glm-4.7-flash-heretic:disable_thinking=true";
+// 2026-09-11: default is now our own Qwen 27B on Beam (Sam). Existing chats keep their chosen model.
+export const DEFAULT_MODEL_ID = "qwen3.8-27b-uncensored";
 // Fallback context window (tokens) for custom models that predate the
 // context-window field, or any model missing the value.
 export const DEFAULT_CONTEXT_WINDOW = 32768;
 export const availableModels: ModelOption[] = [
+  {
+    // Our own model on Beam Cloud (2026-09-11): JonathanColetti/Qwen3.8-27B-Uncensored GGUF Q4_K_M,
+    // llama.cpp on an RTX4090, vision on, thinking off. Context = the measured llama-server -c.
+    id: "qwen3.8-27b-uncensored",
+    name: "Qwen 3.8 27B Uncensored (Beam)",
+    shortName: "Qwen 27B",
+    provider: "beam",
+    contextWindow: 131072, // measured 2026-09-11: 21.9 GB of 24.5 GB VRAM used at 131K with vision (llama-server -c 131072, q8_0 KV)
+  },
   {
     id: "olafangensan-glm-4.7-flash-heretic:disable_thinking=true",
     name: "GLM 4.7 Flash Heretic (Venice)",
