@@ -247,7 +247,7 @@ async function runTurn(a: TurnArgs): Promise<string> {
 
   // Beam scales to zero: after a quiet spell the first token can take a minute while the
   // GPU container wakes (snapshot restore) — tell the friend instead of looking frozen.
-  await setPhase(provider === "beam" ? "waking the being's mind (first message after a pause can take a minute)…" : "thinking");
+  await setPhase(provider === "beam" ? "waking the being's mind (first message after a pause can take a minute)" : "thinking");
   try {
     const result = streamText({
       model,
